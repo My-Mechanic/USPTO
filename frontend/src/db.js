@@ -1,19 +1,24 @@
-// Local-only persistence. Patents live in IndexedDB; the API key lives in
-// localStorage. Nothing leaves the browser.
+// Local-only persistence. Records live in IndexedDB; the API key in localStorage.
+// Nothing leaves the browser.
 
 const DB_NAME = 'uspto-patents';
-const DB_VERSION = 1;
-const STORES = ['public', 'private'];
-const KEY_NAME = 'applicationNumberText';
+const DB_VERSION = 2; // bumped: added 'trademarks' store
+
+// store name -> keyPath
+const STORES = {
+  public: 'applicationNumberText',
+  private: 'applicationNumberText',
+  trademarks: 'serialNumber',
+};
 
 function openDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      for (const s of STORES) {
-        if (!db.objectStoreNames.contains(s)) {
-          db.createObjectStore(s, { keyPath: KEY_NAME });
+      for (const [name, keyPath] of Object.entries(STORES)) {
+        if (!db.objectStoreNames.contains(name)) {
+          db.createObjectStore(name, { keyPath });
         }
       }
     };
@@ -22,21 +27,20 @@ function openDB() {
   });
 }
 
-export async function savePatents(store, patents) {
-  if (!patents || !patents.length) return;
+export async function saveRecords(store, records) {
+  if (!records || !records.length) return;
+  const key = STORES[store];
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readwrite');
     const os = tx.objectStore(store);
-    for (const p of patents) {
-      if (p && p[KEY_NAME]) os.put(p);
-    }
+    for (const r of records) if (r && r[key]) os.put(r);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
 }
 
-export async function getPatents(store) {
+export async function getRecords(store) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readonly');

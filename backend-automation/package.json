@@ -7,7 +7,8 @@
   "scripts": {
     "postinstall": "playwright install chromium",
     "server": "node server.js",
-    "scrape": "node scripts/patent-center.js"
+    "scrape": "node scripts/patent-center.js",
+    "trademarks": "node scripts/trademark-search.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

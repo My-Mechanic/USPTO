@@ -1,12 +1,29 @@
-# USPTO Patent Dashboard
+# USPTO Inventor Dashboard
 
-A dashboard that shows **your USPTO patents** in two lists — **Public Patents**
-and **Private / Pending Applications** — with search, filter, and sort.
+A dashboard for inventors to find their **patents** and **trademarks**, with real
+disambiguation for common names.
 
 - **Public patents** come from the [USPTO Open Data Portal (ODP) API](https://data.uspto.gov/).
 - **Private / pending applications** are captured **locally** from Patent Center
   using a browser you sign into yourself (with MFA). Nothing is scripted, stored
   on a server, or committed to git.
+- **Trademarks** are searched by owner name through the **local bridge** (the free
+  USPTO trademark search has no public browser API).
+
+## Finding the right inventor (not just the right name)
+
+There are ~9,000 patent inventors named "John Smith". The **Advanced patent
+search** combines fields that are AND-ed into one precise ODP query:
+
+- **Inventor first + last name** → matches a single inventor (`inventorBag.lastName`
+  + `firstName`), not just the lead applicant.
+- **Assignee / company** → narrows to one employer.
+- **Title keyword** and **filing-date range** → narrow further.
+
+Then **client-side facets** (inventor **state** and **country**, populated from the
+results) let you refine instantly, and every result card shows **assignee,
+inventors, and inventor location** so you can tell same-name people apart at a
+glance. Results link out to Google Patents.
 
 > **Privacy by design:** your API key lives only in your browser (`localStorage`),
 > patent data lives only in your browser (`IndexedDB`), and private data is read
@@ -24,10 +41,18 @@ script on your `localhost` (browsers block that as "mixed content").
 
 So the app has **two modes**:
 
-| | Public patents | Private / pending |
-|---|---|---|
-| **Public site** (GitHub Pages) | ✅ Enter API key, fetch | ➡️ Use **Import JSON** (data captured locally) |
-| **Local** (`npm run dev`) | ✅ | ✅ **Sync Now** opens a browser; you log in; data loads |
+| | Public patents | Private / pending | Trademarks (by owner) |
+|---|---|---|---|
+| **Public site** (GitHub Pages) | ✅ Enter API key, fetch | ➡️ **Import JSON** | ➡️ **Import JSON** |
+| **Local** (`npm run dev`) | ✅ | ✅ **Sync Now** (browser login) | ✅ **Search trademarks** (local bridge) |
+
+Capture trademarks locally without the UI:
+
+```bash
+cd backend-automation && npm run trademarks -- "OWNER NAME"   # writes output/trademarks.json
+```
+
+Then load `output/trademarks.json` anywhere via **Import JSON** on the Trademarks tab.
 
 This is not a limitation we can engineer away without violating the "never store
 credentials/private data on a server" requirement — it's the correct design.

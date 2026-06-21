@@ -7,6 +7,7 @@
 import express from 'express';
 import cors from 'cors';
 import { scrapePrivateApplications } from './scripts/patent-center.js';
+import { searchTrademarks } from './scripts/trademark-search.js';
 
 const PORT = process.env.PORT || 8787;
 const app = express();
@@ -39,6 +40,25 @@ app.post('/sync', async (_req, res) => {
     res.json({ patents });
   } catch (e) {
     console.error('[sync] failed:', e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    running = false;
+  }
+});
+
+app.get('/trademarks', async (req, res) => {
+  const owner = (req.query.owner || '').toString().trim();
+  if (!owner) return res.status(400).json({ error: 'owner query parameter is required.' });
+  if (running) return res.status(409).json({ error: 'A browser task is already in progress.' });
+  running = true;
+  try {
+    const trademarks = await searchTrademarks({
+      owner,
+      onStatus: (m) => console.log('[trademarks]', m),
+    });
+    res.json({ trademarks });
+  } catch (e) {
+    console.error('[trademarks] failed:', e);
     res.status(500).json({ error: e.message });
   } finally {
     running = false;
