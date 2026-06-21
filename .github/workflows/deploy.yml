@@ -3,6 +3,9 @@ name: Deploy frontend to GitHub Pages
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'data/trademark-watchlist.json'
+      - 'frontend/public/trademark-status.json'
   workflow_dispatch:
 
 # Only the frontend is built/deployed. The backend automation is local-only and

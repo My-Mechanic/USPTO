@@ -1,58 +1,64 @@
-// Trademark search.
+// Trademark monitoring (read side).
 //
-// There is no free, official, browser-callable USPTO trademark search API
-// (tmsearch.uspto.gov blocks direct calls; TSDR/assignment APIs need separate
-// keys and send no CORS headers). So owner-name trademark search runs through the
-// LOCAL bridge (backend-automation), which drives the public USPTO Trademark
-// Search site with a real browser — the same pattern as private patents.
-//
-// On the deployed public site this is unavailable; use Import JSON with results
-// captured locally (`npm run trademarks -- "OWNER NAME"`).
+// A scheduled GitHub Action (.github/workflows/monitor-trademarks.yml) reads the
+// repo's data/trademark-watchlist.json, calls the official USPTO TSDR API with a
+// secret key, and publishes frontend/public/trademark-status.json. This module
+// just READS that published file and manages the local watchlist of serials the
+// user wants to add (which they commit to the repo file to start monitoring).
 
-const BRIDGE = import.meta.env.VITE_SYNC_BRIDGE_URL || 'http://127.0.0.1:8787';
+const STATUS_URL = `${import.meta.env.BASE_URL}trademark-status.json`;
 
-export function bridgeAvailableHere() {
-  return ['localhost', '127.0.0.1'].includes(location.hostname);
-}
+// Local list of serial numbers the user has added in the UI (to be committed to
+// data/trademark-watchlist.json so the Action picks them up).
+export const tmWatch = {
+  list() {
+    try { return JSON.parse(localStorage.getItem('tm_watch') || '[]'); } catch { return []; }
+  },
+  add(serial) {
+    const s = String(serial).replace(/[^0-9]/g, '');
+    if (!s) return;
+    const l = tmWatch.list();
+    if (!l.includes(s)) l.push(s);
+    localStorage.setItem('tm_watch', JSON.stringify(l));
+  },
+  remove(serial) {
+    localStorage.setItem('tm_watch', JSON.stringify(tmWatch.list().filter((x) => x !== serial)));
+  },
+  seed(serials) {
+    const l = new Set(tmWatch.list());
+    for (const s of serials) if (s) l.add(String(s));
+    localStorage.setItem('tm_watch', JSON.stringify([...l]));
+  },
+};
 
-export async function searchTrademarks({ owner, onStatus = () => {} }) {
-  if (!owner) throw new Error('Enter an owner / company name.');
-  if (!bridgeAvailableHere()) {
-    throw new Error(
-      'Trademark search runs from the local app only (the free USPTO trademark ' +
-        'search has no public browser API). Run it locally, or use Import JSON.'
-    );
-  }
-
-  onStatus('Searching USPTO Trademark Search for this owner…');
-  let res;
+// Returns { generatedAt, error, marks: [normalized] }. Empty if not generated yet.
+export async function loadTrademarkStatus() {
   try {
-    res = await fetch(`${BRIDGE}/trademarks?owner=${encodeURIComponent(owner)}`);
+    const res = await fetch(STATUS_URL, { cache: 'no-store' });
+    if (!res.ok) return { marks: [] };
+    const d = await res.json();
+    const marks = (d.marks || []).map(normalizeTrademark);
+    // Keep the local watchlist in sync with what's actually monitored.
+    tmWatch.seed(marks.map((m) => m.serialNumber));
+    return { generatedAt: d.generatedAt || '', error: d.error || '', marks };
   } catch {
-    throw new Error(
-      `Local bridge not reachable at ${BRIDGE}. Start it: ` +
-        '`cd backend-automation && npm run server`.'
-    );
+    return { marks: [] };
   }
-  if (!res.ok) {
-    const msg = await res.text().catch(() => '');
-    throw new Error(`Bridge error ${res.status}. ${msg}`);
-  }
-  const data = await res.json();
-  return data.trademarks || [];
 }
 
 export function normalizeTrademark(t) {
+  const serial = String(t.serialNumber || t.serial || '').replace(/[^0-9]/g, '');
   return {
-    serialNumber: String(t.serialNumber || t.serial || '').trim(),
+    serialNumber: serial,
     registrationNumber: t.registrationNumber || '',
-    markText: t.markText || t.mark || t.wordMark || '(design mark)',
+    markText: t.markText || t.mark || '(no word mark)',
     owner: t.owner || t.ownerName || '',
     status: t.status || t.statusText || '',
+    statusDate: t.statusDate || '',
     filingDate: t.filingDate || '',
     registrationDate: t.registrationDate || '',
-    link: t.serialNumber
-      ? `https://tsdr.uspto.gov/#caseNumber=${t.serialNumber}&caseType=SERIAL_NO&searchType=statusSearch`
+    link: serial
+      ? `https://tsdr.uspto.gov/#caseNumber=${serial}&caseType=SERIAL_NO&searchType=statusSearch`
       : '',
     source: 'trademark',
   };

@@ -1,0 +1,64 @@
+name: Monitor trademarks (TSDR) + deploy
+
+# Fetches fresh trademark status from the official USPTO TSDR API and republishes
+# the site. Runs daily, on demand, and whenever the watchlist changes.
+on:
+  schedule:
+    - cron: '0 11 * * *' # daily ~07:00 ET
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'data/trademark-watchlist.json'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch trademark status from TSDR
+        env:
+          TSDR_API_KEY: ${{ secrets.TSDR_API_KEY }}
+        run: node scripts/monitor-trademarks.mjs
+
+      - name: Persist refreshed status
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add frontend/public/trademark-status.json
+          git diff --quiet --cached || git commit -m "chore: refresh trademark status [skip ci]"
+          git push
+
+      - name: Build site (bundles trademark-status.json)
+        working-directory: frontend
+        run: npm install && npm run build
+        env:
+          VITE_BASE: /USPTO/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

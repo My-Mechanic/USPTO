@@ -1,17 +1,15 @@
-import { searchApplications, buildPatentQuery } from './api.js';
-import { saveRecords, getRecords, clearStore, settings } from './db.js';
+import { fetchPatent, searchApplications, buildPatentQuery, patentSnapshot } from './api.js';
+import { saveRecords, getRecords, deleteRecord, clearAll, settings } from './db.js';
 import { syncPrivate, bridgeAvailableHere } from './sync.js';
-import { searchTrademarks, normalizeTrademark } from './trademarks.js';
-import { renderPatentList, renderTrademarkList, setStatus } from './ui.js';
+import { loadTrademarkStatus, tmWatch } from './trademarks.js';
+import { renderWatchlist, renderResults, renderTrademarks, setStatus } from './ui.js';
 
 const state = {
-  public: [],
-  private: [],
-  trademarks: [],
+  patents: [],
+  marks: [],
+  tmGeneratedAt: '',
   pFilter: { text: '', state: '', country: '', sort: 'filingDate-desc' },
-  tFilter: '',
 };
-
 const $ = (id) => document.getElementById(id);
 
 async function init() {
@@ -19,31 +17,24 @@ async function init() {
   if (presetKey && presetKey !== settings.getApiKey()) settings.setApiKey(presetKey);
   $('apiKey').value = presetKey;
 
-  state.public = await getRecords('public');
-  state.private = await getRecords('private');
-  state.trademarks = await getRecords('trademarks');
-
+  state.patents = await getRecords();
   wireTabs();
   wirePatents();
   wireTrademarks();
+  if (!bridgeAvailableHere()) $('syncBtn').title = 'Live private sync works only when running locally.';
 
-  if (!bridgeAvailableHere()) {
-    $('syncBtn').title = 'Live sync works only when running locally. Here, use Import JSON.';
-    $('tSearch').title = 'Trademark search works only when running locally. Here, use Import JSON.';
-  }
   refreshPatents();
-  refreshTrademarks();
-  setStatus('Ready. Build an advanced patent query, or search trademarks.');
+  await refreshTrademarks();
+  setStatus('Add your patents and trademarks to start monitoring them.');
 }
 
-/* ---------- tabs ---------- */
+/* ---------------- tabs + key ---------------- */
 function wireTabs() {
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.onclick = () => {
       document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
-      const tab = btn.dataset.tab;
-      $('tab-patents').hidden = tab !== 'patents';
-      $('tab-trademarks').hidden = tab !== 'trademarks';
+      $('tab-patents').hidden = btn.dataset.tab !== 'patents';
+      $('tab-trademarks').hidden = btn.dataset.tab !== 'trademarks';
     };
   });
   $('saveKey').onclick = () => {
@@ -52,120 +43,158 @@ function wireTabs() {
   };
 }
 
-/* ---------- patents ---------- */
+/* ---------------- patents ---------------- */
 function wirePatents() {
-  $('pSearch').onclick = onSearchPatents;
+  $('addBtn').onclick = onAddByNumber;
+  $('addNum').addEventListener('keydown', (e) => { if (e.key === 'Enter') onAddByNumber(); });
+  $('checkAll').onclick = onCheckAll;
   $('syncBtn').onclick = onSyncPrivate;
-  $('pImport').onchange = (e) => onImport(e, 'private');
-  $('pExport').onclick = onExportPatents;
-  $('pClear').onclick = onClearPatents;
+  $('pImport').onchange = onImport;
+  $('pExport').onclick = onExport;
+  $('pClear').onclick = onClearAll;
+  $('findBtn').onclick = onFind;
   $('fText').oninput = (e) => { state.pFilter.text = e.target.value.toLowerCase(); refreshPatents(); };
   $('fState').onchange = (e) => { state.pFilter.state = e.target.value; refreshPatents(); };
   $('fCountry').onchange = (e) => { state.pFilter.country = e.target.value; refreshPatents(); };
   $('fSort').onchange = (e) => { state.pFilter.sort = e.target.value; refreshPatents(); };
-  for (const id of ['pFirst', 'pLast', 'pAssignee', 'pTitle']) {
-    $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') onSearchPatents(); });
-  }
 }
 
-async function onSearchPatents() {
-  const apiKey = settings.getApiKey() || $('apiKey').value.trim();
-  if (apiKey && apiKey !== settings.getApiKey()) settings.setApiKey(apiKey);
-  if (!apiKey) return setStatus('Enter your USPTO ODP API key first.', 'error');
+function apiKeyOrWarn() {
+  const k = settings.getApiKey() || $('apiKey').value.trim();
+  if (k && k !== settings.getApiKey()) settings.setApiKey(k);
+  if (!k) { setStatus('Enter your USPTO ODP API key first.', 'error'); return null; }
+  return k;
+}
 
-  const raw = $('pRaw').value.trim();
-  const q =
-    raw ||
-    buildPatentQuery({
-      firstName: $('pFirst').value.trim(),
-      lastName: $('pLast').value.trim(),
-      assignee: $('pAssignee').value.trim(),
-      title: $('pTitle').value.trim(),
-      dateFrom: $('pFrom').value,
-      dateTo: $('pTo').value,
-    });
-  if (!q) return setStatus('Fill at least one search field (or a raw query).', 'error');
-
-  setStatus('Searching public patents…');
+async function onAddByNumber() {
+  const apiKey = apiKeyOrWarn();
+  if (!apiKey) return;
+  const number = $('addNum').value.trim();
+  const type = $('addType').value;
+  if (!number) return setStatus('Enter an application or patent number.', 'error');
+  setStatus(`Fetching ${type} ${number}…`);
   try {
-    let all = [];
-    const limit = 100;
-    let total = null;
-    for (let page = 0; page < 20; page++) {
-      const { patents, count } = await searchApplications({
-        apiKey, q, offset: page * limit, limit,
-        sort: 'applicationMetaData.filingDate desc',
-      });
-      if (total == null) total = count;
-      all = all.concat(patents);
-      if (patents.length < limit || (count != null && all.length >= count)) break;
-    }
-    await saveRecords('public', all);
-    state.public = await getRecords('public');
-    const more = total != null && total > all.length ? ` (of ${total} total — refine to narrow)` : '';
-    setStatus(`Found ${all.length} public application(s)${more}.`, 'ok');
-    refreshPatents();
+    const p = await fetchPatent({ apiKey, number, type });
+    await addPatent(p);
+    $('addNum').value = '';
+    setStatus(`Added “${p.inventionTitle || p.applicationNumberText}” to My Patents.`, 'ok');
   } catch (e) {
     setStatus(e.message, 'error');
   }
+}
+
+async function addPatent(p) {
+  const existing = state.patents.find((x) => x.applicationNumberText === p.applicationNumberText);
+  const rec = {
+    ...p,
+    addedAt: existing ? existing.addedAt : new Date().toISOString(),
+    lastChecked: new Date().toISOString(),
+    snapshot: patentSnapshot(p),
+    changed: false,
+    changeNote: '',
+  };
+  await saveRecords([rec]);
+  state.patents = await getRecords();
+  refreshPatents();
+}
+
+async function onCheckAll() {
+  const apiKey = apiKeyOrWarn();
+  if (!apiKey) return;
+  if (!state.patents.length) return setStatus('Nothing to check yet.', 'error');
+  setStatus('Checking your patents for updates…');
+  let changed = 0;
+  for (const old of state.patents) {
+    try {
+      const fresh = await fetchPatent({ apiKey, number: old.applicationNumberText, type: 'application' });
+      const snap = patentSnapshot(fresh);
+      const didChange = old.snapshot && snap !== old.snapshot;
+      if (didChange) changed++;
+      await saveRecords([{
+        ...fresh,
+        addedAt: old.addedAt,
+        lastChecked: new Date().toISOString(),
+        snapshot: snap,
+        changed: didChange || old.changed,
+        changeNote: didChange
+          ? `Status/event changed: ${fresh.status} — ${fresh.latestEvent || ''}`.trim()
+          : old.changeNote || '',
+      }]);
+    } catch (e) {
+      // keep going; one failure shouldn't stop the batch
+    }
+  }
+  state.patents = await getRecords();
+  refreshPatents();
+  setStatus(changed ? `${changed} application(s) have updates — highlighted below.` : 'Checked. No changes since last time.', 'ok');
 }
 
 async function onSyncPrivate() {
   setStatus('Starting private sync — a browser window will open for you to log in…');
   try {
     const patents = await syncPrivate({ onStatus: (m) => setStatus(m) });
-    await saveRecords('private', patents.map((p) => ({ ...p, source: 'private' })));
-    state.private = await getRecords('private');
-    setStatus(`Synced ${patents.length} private/pending application(s).`, 'ok');
-    refreshPatents();
+    for (const p of patents) await addPatent({ ...p, source: 'private' });
+    setStatus(`Synced ${patents.length} private/pending application(s) into My Patents.`, 'ok');
   } catch (e) {
     setStatus(e.message, 'error');
   }
 }
 
-async function onImport(e, store) {
+async function onFind() {
+  const apiKey = apiKeyOrWarn();
+  if (!apiKey) return;
+  const raw = $('pRaw').value.trim();
+  const q = raw || buildPatentQuery({
+    firstName: $('pFirst').value.trim(), lastName: $('pLast').value.trim(),
+    assignee: $('pAssignee').value.trim(), title: $('pTitle').value.trim(),
+    dateFrom: $('pFrom').value, dateTo: $('pTo').value,
+  });
+  if (!q) return setStatus('Fill at least one field to find your patent.', 'error');
+  setStatus('Searching…');
+  try {
+    const { patents, count } = await searchApplications({ apiKey, q, limit: 50, sort: 'applicationMetaData.filingDate desc' });
+    const tracked = new Set(state.patents.map((p) => p.applicationNumberText));
+    renderResults($('results'), patents, { onAdd: async (p) => { await addPatent(p); onFind(); }, tracked });
+    $('resultsWrap').hidden = false;
+    setStatus(`${count ?? patents.length} match(es)${count > patents.length ? ` (showing ${patents.length} — refine to narrow)` : ''}. Click “Add” on yours.`, 'ok');
+  } catch (e) {
+    setStatus(e.message, 'error');
+  }
+}
+
+async function onImport(e) {
   const file = e.target.files[0];
   if (!file) return;
   try {
     const parsed = JSON.parse(await file.text());
-    const keyField = store === 'trademarks' ? 'serialNumber' : 'applicationNumberText';
-    let items = Array.isArray(parsed) ? parsed : parsed[store] || parsed.patents || parsed.trademarks || [];
-    if (store === 'trademarks') items = items.map(normalizeTrademark);
-    items = items.filter((r) => r && r[keyField]);
-    await saveRecords(store, items);
-    if (store === 'trademarks') { state.trademarks = await getRecords('trademarks'); refreshTrademarks(); }
-    else { state.private = await getRecords('private'); refreshPatents(); }
-    setStatus(`Imported ${items.length} record(s).`, 'ok');
+    const items = (Array.isArray(parsed) ? parsed : parsed.patents || []).filter((p) => p && p.applicationNumberText);
+    await saveRecords(items);
+    state.patents = await getRecords();
+    refreshPatents();
+    setStatus(`Imported ${items.length} patent(s).`, 'ok');
   } catch (err) {
     setStatus('Import failed: ' + err.message, 'error');
   }
   e.target.value = '';
 }
 
-function download(name, obj) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-function onExportPatents() { download('uspto-patents.json', { public: state.public, private: state.private }); }
-
-async function onClearPatents() {
-  if (!confirm('Clear all stored patents from this browser?')) return;
-  await clearStore('public'); await clearStore('private');
-  state.public = []; state.private = [];
-  setStatus('Patents cleared.', 'ok'); refreshPatents();
+function onExport() {
+  download('my-patents.json', { patents: state.patents });
 }
 
-function patentView(list) {
+async function onClearAll() {
+  if (!confirm('Remove all tracked patents from this browser?')) return;
+  await clearAll();
+  state.patents = [];
+  refreshPatents();
+  setStatus('My Patents cleared.', 'ok');
+}
+
+function patentView() {
   const { text, state: st, country, sort } = state.pFilter;
-  const out = list.filter((p) => {
-    const hay = `${p.applicationNumberText} ${p.inventionTitle} ${p.status} ${p.assignee} ${p.inventors} ${p.filingDate}`.toLowerCase();
-    return (!text || hay.includes(text)) &&
-      (!st || p.inventorState === st) &&
-      (!country || p.inventorCountry === country);
+  const out = state.patents.filter((p) => {
+    const hay = `${p.applicationNumberText} ${p.inventionTitle} ${p.status} ${p.assignee} ${p.inventors}`.toLowerCase();
+    return (!text || hay.includes(text)) && (!st || p.inventorState === st) && (!country || p.inventorCountry === country);
   });
   const [key, dir] = sort.split('-');
   out.sort((a, b) => {
@@ -178,73 +207,92 @@ function patentView(list) {
 
 function refreshPatents() {
   populateFacets();
-  renderPatentList($('publicList'), patentView(state.public));
-  renderPatentList($('privateList'), patentView(state.private));
-  $('publicCount').textContent = patentView(state.public).length;
-  $('privateCount').textContent = patentView(state.private).length;
+  const view = patentView();
+  renderWatchlist($('watchlist'), view, {
+    onRemove: async (p) => { await deleteRecord(p.applicationNumberText); state.patents = await getRecords(); refreshPatents(); setStatus('Removed.', 'ok'); },
+    onCheck: async (p) => { await recheckOne(p); },
+  });
+  $('patCount').textContent = view.length;
+}
+
+async function recheckOne(p) {
+  const apiKey = apiKeyOrWarn();
+  if (!apiKey) return;
+  setStatus(`Re-checking ${p.applicationNumberText}…`);
+  try {
+    const fresh = await fetchPatent({ apiKey, number: p.applicationNumberText, type: 'application' });
+    const snap = patentSnapshot(fresh);
+    const didChange = p.snapshot && snap !== p.snapshot;
+    await saveRecords([{ ...fresh, addedAt: p.addedAt, lastChecked: new Date().toISOString(), snapshot: snap, changed: didChange || p.changed, changeNote: didChange ? `Status/event changed: ${fresh.status} — ${fresh.latestEvent || ''}`.trim() : p.changeNote || '' }]);
+    state.patents = await getRecords();
+    refreshPatents();
+    setStatus(didChange ? 'Update found — highlighted.' : 'No change.', 'ok');
+  } catch (e) { setStatus(e.message, 'error'); }
 }
 
 function populateFacets() {
-  const all = [...state.public, ...state.private];
-  fillSelect($('fState'), state.pFilter.state, distinct(all.map((p) => p.inventorState)), 'All states');
-  fillSelect($('fCountry'), state.pFilter.country, distinct(all.map((p) => p.inventorCountry)), 'All countries');
+  fillSelect($('fState'), state.pFilter.state, distinct(state.patents.map((p) => p.inventorState)), 'All states');
+  fillSelect($('fCountry'), state.pFilter.country, distinct(state.patents.map((p) => p.inventorCountry)), 'All countries');
 }
-function distinct(arr) { return [...new Set(arr.filter(Boolean))].sort(); }
+function distinct(a) { return [...new Set(a.filter(Boolean))].sort(); }
 function fillSelect(sel, current, values, allLabel) {
-  const prev = current;
   sel.replaceChildren();
   const o0 = document.createElement('option'); o0.value = ''; o0.textContent = allLabel; sel.appendChild(o0);
-  for (const v of values) {
-    const o = document.createElement('option'); o.value = v; o.textContent = v;
-    if (v === prev) o.selected = true;
-    sel.appendChild(o);
-  }
+  for (const v of values) { const o = document.createElement('option'); o.value = v; o.textContent = v; if (v === current) o.selected = true; sel.appendChild(o); }
 }
 
-/* ---------- trademarks ---------- */
+/* ---------------- trademarks ---------------- */
 function wireTrademarks() {
-  $('tSearch').onclick = onSearchTrademarks;
-  $('tImport').onchange = (e) => onImport(e, 'trademarks');
-  $('tExport').onclick = () => download('uspto-trademarks.json', { trademarks: state.trademarks });
-  $('tClear').onclick = onClearTrademarks;
-  $('tFilter').oninput = (e) => { state.tFilter = e.target.value.toLowerCase(); refreshTrademarks(); };
-  $('tOwner').addEventListener('keydown', (e) => { if (e.key === 'Enter') onSearchTrademarks(); });
+  $('tmAddBtn').onclick = onTmAdd;
+  $('tmSerial').addEventListener('keydown', (e) => { if (e.key === 'Enter') onTmAdd(); });
+  $('tmDownload').onclick = onTmDownload;
+  $('tmRefresh').onclick = refreshTrademarks;
+  $('tmFilter').oninput = () => renderTM();
 }
 
-async function onSearchTrademarks() {
-  const owner = $('tOwner').value.trim();
-  if (!owner) return setStatus('Enter an owner / company name.', 'error');
-  setStatus('Searching trademarks…');
-  try {
-    const raw = await searchTrademarks({ owner, onStatus: (m) => setStatus(m) });
-    const marks = raw.map(normalizeTrademark).filter((t) => t.serialNumber);
-    await saveRecords('trademarks', marks);
-    state.trademarks = await getRecords('trademarks');
-    setStatus(`Found ${marks.length} trademark(s).`, 'ok');
-    refreshTrademarks();
-  } catch (e) {
-    setStatus(e.message, 'error');
-  }
+async function refreshTrademarks() {
+  const { generatedAt, error, marks } = await loadTrademarkStatus();
+  state.marks = marks;
+  state.tmGeneratedAt = generatedAt;
+  $('tmGenerated').textContent = error
+    ? `⚠ ${error}`
+    : generatedAt ? `Last checked by the monitor: ${new Date(generatedAt).toLocaleString()}` : 'Not monitored yet — add serials, commit the watchlist, run the Action.';
+  renderTM();
 }
 
-async function onClearTrademarks() {
-  if (!confirm('Clear all stored trademarks from this browser?')) return;
-  await clearStore('trademarks');
-  state.trademarks = [];
-  setStatus('Trademarks cleared.', 'ok'); refreshTrademarks();
+function onTmAdd() {
+  const serial = $('tmSerial').value.replace(/[^0-9]/g, '');
+  if (!serial) return setStatus('Enter a trademark serial number (digits).', 'error');
+  tmWatch.add(serial);
+  $('tmSerial').value = '';
+  setStatus(`Added serial ${serial} to your watchlist. Click “Download watchlist.json” and commit it to start monitoring.`, 'ok');
+  renderTM();
 }
 
-function trademarkView() {
-  const t = state.tFilter;
-  return state.trademarks.filter((m) => {
-    const hay = `${m.markText} ${m.serialNumber} ${m.registrationNumber} ${m.status} ${m.owner}`.toLowerCase();
-    return !t || hay.includes(t);
+function onTmDownload() {
+  download('trademark-watchlist.json', tmWatch.list());
+  setStatus('Commit this file to data/trademark-watchlist.json in your repo (or send it to me).', 'ok');
+}
+
+function renderTM() {
+  // Merge monitored marks with watchlist serials that have no status yet.
+  const filter = $('tmFilter').value.toLowerCase();
+  const bySerial = new Map(state.marks.map((m) => [m.serialNumber, m]));
+  const rows = tmWatch.list().map((s) => bySerial.get(s) || { serialNumber: s, markText: '(pending)', pending: true, link: `https://tsdr.uspto.gov/#caseNumber=${s}&caseType=SERIAL_NO&searchType=statusSearch` });
+  for (const m of state.marks) if (!tmWatch.list().includes(m.serialNumber)) rows.push(m);
+  const view = rows.filter((t) => !filter || `${t.markText} ${t.serialNumber} ${t.status} ${t.owner}`.toLowerCase().includes(filter));
+  renderTrademarks($('tmList'), view, {
+    onRemove: (t) => { tmWatch.remove(t.serialNumber); renderTM(); setStatus(`Removed ${t.serialNumber} locally. Re-download & commit the watchlist to stop monitoring it.`, 'ok'); },
   });
-}
-function refreshTrademarks() {
-  const view = trademarkView();
-  renderTrademarkList($('tmList'), view);
   $('tmCount').textContent = view.length;
+}
+
+/* ---------------- shared ---------------- */
+function download(name, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 init();

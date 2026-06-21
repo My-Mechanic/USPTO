@@ -1,61 +1,55 @@
-# USPTO Inventor Dashboard
+# My USPTO Portfolio
 
-A dashboard for inventors to find their **patents** and **trademarks**, with real
-disambiguation for common names.
+A personal monitor for **your own** patents and trademarks. Add them to a
+watchlist by number and the app tracks their status and flags updates — it is
+**not** a search engine for other people's IP.
 
-- **Public patents** come from the [USPTO Open Data Portal (ODP) API](https://data.uspto.gov/).
-- **Private / pending applications** are captured **locally** from Patent Center
-  using a browser you sign into yourself (with MFA). Nothing is scripted, stored
-  on a server, or committed to git.
-- **Trademarks** are searched by owner name through the **local bridge** (the free
-  USPTO trademark search has no public browser API).
+- **Patents** — add by application or patent number; status + prosecution events
+  come live from the [USPTO Open Data Portal API](https://data.uspto.gov/) **in
+  your browser**. "Check all for updates" re-fetches and highlights anything that
+  changed since last time. Works on the live site, no server.
+- **Private / pending** — pulled **locally** from Patent Center via a browser you
+  sign into yourself (MFA). Nothing scripted or stored on a server.
+- **Trademarks** — add serial numbers to a watchlist; a scheduled **GitHub Action**
+  calls the official **USPTO TSDR API** with your free key and republishes the site
+  with fresh status. Fully automatic, no server.
 
-## Finding the right inventor (not just the right name)
+> **Privacy by design:** your API key and tracked patents live only in your browser
+> (`localStorage` / `IndexedDB`). Trademark *status* (public data) is published by
+> the Action. No credentials or private patent data touch any server or this repo.
 
-There are ~9,000 patent inventors named "John Smith". The **Advanced patent
-search** combines fields that are AND-ed into one precise ODP query:
+## Telling same-name inventors apart
 
-- **Inventor first + last name** → matches a single inventor (`inventorBag.lastName`
-  + `firstName`), not just the lead applicant.
-- **Assignee / company** → narrows to one employer.
-- **Title keyword** and **filing-date range** → narrow further.
-
-Then **client-side facets** (inventor **state** and **country**, populated from the
-results) let you refine instantly, and every result card shows **assignee,
-inventors, and inventor location** so you can tell same-name people apart at a
-glance. Results link out to Google Patents.
-
-> **Privacy by design:** your API key lives only in your browser (`localStorage`),
-> patent data lives only in your browser (`IndexedDB`), and private data is read
-> through *your own* authenticated session on *your own* machine. No credentials
-> or private data ever touch a server or this repo.
+Don't know your application number? **Find your patent (search to add)** combines
+inventor first+last name, assignee/company, title keyword, and filing-date range
+into one precise query — turning ~9,000 "John Smith" hits into a short list — then
+you click **+ Add** on yours. Each result shows assignee, inventors, and inventor
+location so namesakes are easy to distinguish.
 
 ---
 
-## ⚠️ Read this first — the one architectural constraint
+## How trademark monitoring works (one-time setup)
 
-The private-patent automation **cannot run on GitHub Pages or in GitHub Actions.**
-Patent Center requires an interactive, human MFA sign-in, and we deliberately never
-store credentials. A browser served over HTTPS (GitHub Pages) also cannot talk to a
-script on your `localhost` (browsers block that as "mixed content").
+1. **Get a free TSDR API key:** https://account.uspto.gov/profile/api-manager
+2. **Add it as a repo secret:** GitHub → repo **Settings → Secrets and variables →
+   Actions → New repository secret** → name `TSDR_API_KEY`, paste the key.
+3. **Add serials:** on the **My Trademarks** tab, type each serial number → **Add
+   serial** → **Download watchlist.json** → commit it to
+   `data/trademark-watchlist.json` (via GitHub's web editor, or send it to me).
+4. The **Monitor trademarks** Action runs on that commit, then **daily**, and on
+   demand (Actions tab → *Run workflow*). It fetches status and redeploys the site.
 
-So the app has **two modes**:
+> The patent watchlist needs no setup — add a number and click **Check for updates**
+> anytime.
 
-| | Public patents | Private / pending | Trademarks (by owner) |
-|---|---|---|---|
-| **Public site** (GitHub Pages) | ✅ Enter API key, fetch | ➡️ **Import JSON** | ➡️ **Import JSON** |
-| **Local** (`npm run dev`) | ✅ | ✅ **Sync Now** (browser login) | ✅ **Search trademarks** (local bridge) |
+---
 
-Capture trademarks locally without the UI:
+## ⚠️ The one architectural constraint (private patents only)
 
-```bash
-cd backend-automation && npm run trademarks -- "OWNER NAME"   # writes output/trademarks.json
-```
-
-Then load `output/trademarks.json` anywhere via **Import JSON** on the Trademarks tab.
-
-This is not a limitation we can engineer away without violating the "never store
-credentials/private data on a server" requirement — it's the correct design.
+Private/pending Patent Center data **cannot** be fetched on the live site: it needs
+your interactive MFA sign-in, and we never store credentials. So **Sync private /
+pending** runs only from the **local** app (`npm run dev` + the local bridge). On
+the public site, capture it locally and use **Import JSON**.
 
 ---
 

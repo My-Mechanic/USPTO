@@ -3,19 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>USPTO Inventor Dashboard</title>
+    <title>My USPTO Portfolio</title>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
     <header class="topbar">
-      <h1>USPTO Inventor Dashboard</h1>
-      <p class="sub">
-        Find your patents &amp; trademarks — with real disambiguation for common
-        names. Everything stays in this browser.
-      </p>
+      <h1>My USPTO Portfolio</h1>
+      <p class="sub">Track your own patents &amp; trademarks and watch for status updates. Everything stays in this browser.</p>
     </header>
 
-    <!-- Shared API key -->
     <section class="panel keybar">
       <label class="field grow">
         <span>USPTO ODP API key (for patents) — stored only in this browser</span>
@@ -26,96 +22,96 @@
     </section>
 
     <nav class="tabs">
-      <button class="tab active" data-tab="patents">Patents</button>
-      <button class="tab" data-tab="trademarks">Trademarks</button>
+      <button class="tab active" data-tab="patents">My Patents</button>
+      <button class="tab" data-tab="trademarks">My Trademarks</button>
     </nav>
 
-    <!-- ================= PATENTS ================= -->
+    <!-- ===================== PATENTS ===================== -->
     <div id="tab-patents" class="tabpanel">
       <section class="panel">
-        <h3 class="panel-h">Advanced patent search</h3>
-        <p class="hint">
-          Common names collide (there are ~9,000 “John Smith” inventors). Combine
-          fields below — they’re AND-ed — to pin down the right person.
-        </p>
-        <div class="grid">
-          <label class="field"><span>Inventor first name</span><input id="pFirst" placeholder="John" /></label>
-          <label class="field"><span>Inventor last name</span><input id="pLast" placeholder="Smith" /></label>
-          <label class="field"><span>Assignee / company</span><input id="pAssignee" placeholder="e.g. IBM" /></label>
-          <label class="field"><span>Title keyword</span><input id="pTitle" placeholder="e.g. battery" /></label>
-          <label class="field"><span>Filed from</span><input id="pFrom" type="date" /></label>
-          <label class="field"><span>Filed to</span><input id="pTo" type="date" /></label>
-        </div>
-        <details>
-          <summary>Advanced: raw ODP query (overrides the fields above)</summary>
-          <label class="field grow"><span>q</span>
-            <input id="pRaw" placeholder='applicationMetaData.inventionTitle:(solar)' />
-          </label>
-        </details>
+        <h3 class="panel-h">Add a patent to track</h3>
         <div class="row wrap">
-          <button id="pSearch" class="btn primary">Search public patents</button>
+          <select id="addType" aria-label="Number type">
+            <option value="application">Application #</option>
+            <option value="patent">Patent #</option>
+          </select>
+          <input id="addNum" class="grow" placeholder="e.g. 18000000" />
+          <button id="addBtn" class="btn primary">Add</button>
           <button id="syncBtn" class="btn">Sync private / pending (local)</button>
           <label class="btn file">Import JSON<input id="pImport" type="file" accept="application/json" hidden /></label>
-          <button id="pExport" class="btn">Export JSON</button>
-          <button id="pClear" class="btn danger">Clear patents</button>
+          <button id="pExport" class="btn">Export</button>
+          <button id="pClear" class="btn danger">Clear</button>
         </div>
+        <details>
+          <summary>Find your patent (search to add) — for when you don’t know the number</summary>
+          <p class="hint">Common names collide (~9,000 “John Smith” inventors). Combine fields — they’re AND-ed — then click “Add” on yours.</p>
+          <div class="grid">
+            <label class="field"><span>Inventor first name</span><input id="pFirst" placeholder="John" /></label>
+            <label class="field"><span>Inventor last name</span><input id="pLast" placeholder="Smith" /></label>
+            <label class="field"><span>Assignee / company</span><input id="pAssignee" placeholder="e.g. IBM" /></label>
+            <label class="field"><span>Title keyword</span><input id="pTitle" placeholder="e.g. battery" /></label>
+            <label class="field"><span>Filed from</span><input id="pFrom" type="date" /></label>
+            <label class="field"><span>Filed to</span><input id="pTo" type="date" /></label>
+          </div>
+          <label class="field grow"><span>Advanced: raw ODP query (overrides fields above)</span>
+            <input id="pRaw" placeholder='applicationMetaData.inventionTitle:(solar)' />
+          </label>
+          <div class="row"><button id="findBtn" class="btn">Search</button></div>
+          <div id="resultsWrap" hidden>
+            <h4 class="sub-h">Results</h4>
+            <div id="results" class="list"></div>
+          </div>
+        </details>
       </section>
 
       <section class="filters">
-        <input id="fText" type="search" placeholder="Filter results: app #, title, inventor…" />
+        <input id="fText" type="search" placeholder="Filter your patents: app #, title, status…" />
         <select id="fState" aria-label="Inventor state"><option value="">All states</option></select>
         <select id="fCountry" aria-label="Inventor country"><option value="">All countries</option></select>
         <select id="fSort" aria-label="Sort">
           <option value="filingDate-desc">Filing date ↓</option>
           <option value="filingDate-asc">Filing date ↑</option>
-          <option value="applicationNumberText-asc">App # ↑</option>
           <option value="status-asc">Status A–Z</option>
           <option value="inventionTitle-asc">Title A–Z</option>
         </select>
       </section>
 
-      <main class="columns">
+      <main class="columns one">
         <section class="col">
-          <h2>Public Patents <span class="count" id="publicCount">0</span></h2>
-          <div id="publicList" class="list"></div>
-        </section>
-        <section class="col">
-          <h2>Private / Pending <span class="count" id="privateCount">0</span></h2>
-          <div id="privateList" class="list"></div>
+          <div class="col-head">
+            <h2>My Patents <span class="count" id="patCount">0</span></h2>
+            <button id="checkAll" class="btn primary small">Check all for updates</button>
+          </div>
+          <div id="watchlist" class="list"></div>
         </section>
       </main>
     </div>
 
-    <!-- ================= TRADEMARKS ================= -->
+    <!-- ===================== TRADEMARKS ===================== -->
     <div id="tab-trademarks" class="tabpanel" hidden>
       <section class="panel">
-        <h3 class="panel-h">Trademark search by owner</h3>
+        <h3 class="panel-h">Track a trademark</h3>
         <p class="hint">
-          The free USPTO trademark search has no public browser API, so this runs
-          through the <strong>local bridge</strong> (like private patents). On the
-          public site, use <strong>Import JSON</strong> with results captured
-          locally via <code>npm run trademarks -- "OWNER NAME"</code>.
+          Add your serial numbers, then <strong>Download watchlist.json</strong> and commit it to
+          <code>data/trademark-watchlist.json</code>. A daily GitHub Action calls the official USPTO
+          TSDR API and updates status automatically — no server needed.
         </p>
-        <div class="row">
-          <label class="field grow"><span>Owner / company name</span>
-            <input id="tOwner" placeholder="e.g. Acme Robotics LLC" />
-          </label>
-          <button id="tSearch" class="btn primary">Search trademarks</button>
-        </div>
         <div class="row wrap">
-          <label class="btn file">Import JSON<input id="tImport" type="file" accept="application/json" hidden /></label>
-          <button id="tExport" class="btn">Export JSON</button>
-          <button id="tClear" class="btn danger">Clear trademarks</button>
+          <input id="tmSerial" class="grow" placeholder="Trademark serial number, e.g. 88000000" />
+          <button id="tmAddBtn" class="btn primary">Add serial</button>
+          <button id="tmDownload" class="btn">Download watchlist.json</button>
+          <button id="tmRefresh" class="btn">Refresh status</button>
         </div>
+        <div id="tmGenerated" class="muted small"></div>
       </section>
 
       <section class="filters">
-        <input id="tFilter" type="search" placeholder="Filter: mark, serial #, status…" />
+        <input id="tmFilter" type="search" placeholder="Filter: mark, serial #, status, owner…" />
       </section>
 
       <main class="columns one">
         <section class="col">
-          <h2>Trademarks <span class="count" id="tmCount">0</span></h2>
+          <h2>My Trademarks <span class="count" id="tmCount">0</span></h2>
           <div id="tmList" class="list"></div>
         </section>
       </main>
@@ -124,9 +120,8 @@
     <div id="status" class="status" role="status" aria-live="polite"></div>
 
     <footer class="foot">
-      Public patents: USPTO Open Data Portal. Private patents &amp; trademarks:
-      captured locally through your own session. Data stays in your browser. Use
-      per the USPTO Terms of Use.
+      Patents: USPTO Open Data Portal (live, in your browser). Trademarks: USPTO TSDR via a scheduled
+      GitHub Action. Your data stays in your browser / your repo. Use per the USPTO Terms of Use.
     </footer>
 
     <script type="module" src="/src/main.js"></script>
