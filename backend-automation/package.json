@@ -1,0 +1,20 @@
+{
+  "name": "uspto-backend-automation",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-only headless-browser automation for USPTO Patent Center (private/pending applications).",
+  "scripts": {
+    "postinstall": "playwright install chromium",
+    "server": "node server.js",
+    "scrape": "node scripts/patent-center.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "playwright": "^1.45.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0"
+  }
+}

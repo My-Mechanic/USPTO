@@ -1,1 +1,174 @@
-# USPTO Website Project
+# USPTO Patent Dashboard
+
+A dashboard that shows **your USPTO patents** in two lists — **Public Patents**
+and **Private / Pending Applications** — with search, filter, and sort.
+
+- **Public patents** come from the [USPTO Open Data Portal (ODP) API](https://data.uspto.gov/).
+- **Private / pending applications** are captured **locally** from Patent Center
+  using a browser you sign into yourself (with MFA). Nothing is scripted, stored
+  on a server, or committed to git.
+
+> **Privacy by design:** your API key lives only in your browser (`localStorage`),
+> patent data lives only in your browser (`IndexedDB`), and private data is read
+> through *your own* authenticated session on *your own* machine. No credentials
+> or private data ever touch a server or this repo.
+
+---
+
+## ⚠️ Read this first — the one architectural constraint
+
+The private-patent automation **cannot run on GitHub Pages or in GitHub Actions.**
+Patent Center requires an interactive, human MFA sign-in, and we deliberately never
+store credentials. A browser served over HTTPS (GitHub Pages) also cannot talk to a
+script on your `localhost` (browsers block that as "mixed content").
+
+So the app has **two modes**:
+
+| | Public patents | Private / pending |
+|---|---|---|
+| **Public site** (GitHub Pages) | ✅ Enter API key, fetch | ➡️ Use **Import JSON** (data captured locally) |
+| **Local** (`npm run dev`) | ✅ | ✅ **Sync Now** opens a browser; you log in; data loads |
+
+This is not a limitation we can engineer away without violating the "never store
+credentials/private data on a server" requirement — it's the correct design.
+
+---
+
+## Repository layout
+
+```
+USPTO/
+├── frontend/                 # Vite + vanilla-JS SPA (deployed to GitHub Pages)
+│   ├── index.html
+│   ├── vite.config.js        # base: '/USPTO/'  (must match repo name)
+│   └── src/{main,api,db,sync,ui}.js, styles.css
+├── backend-automation/       # LOCAL ONLY — never deployed
+│   ├── server.js             # 127.0.0.1 bridge the "Sync Now" button calls
+│   ├── scripts/patent-center.js   # Playwright sign-in + scrape
+│   └── playwright.config.js
+└── .github/workflows/deploy.yml   # builds + deploys frontend on push to main
+```
+
+---
+
+## Prerequisites
+
+- **Node.js 18+** (20 recommended) and npm
+- A **USPTO.gov account** with an **ODP API key** (free) for public data
+- Google **Chrome** installed (recommended) for the private-data automation
+
+### Get a USPTO ODP API key
+
+1. Go to **https://data.uspto.gov/myodp** and sign in / create a USPTO.gov account.
+2. Verify your identity (ID.me) and link it.
+3. On the **Getting Started** page, **request an API key** and copy it.
+   (Keys unused for 90 days are deleted.)
+
+You'll paste this key into the app — it is stored only in your browser.
+
+---
+
+## Run it locally
+
+### 1. Frontend (public patents)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open the printed URL (e.g. `http://localhost:5173/USPTO/`).
+
+1. Paste your **ODP API key** → **Save key**.
+2. Type an inventor/applicant name → **Fetch public patents**.
+   (Or use **Advanced → raw ODP query** for precise queries.)
+3. Use the filter box, status filter, and sort dropdown to explore.
+
+> If a field shows blank, the ODP response field name may have changed — adjust
+> `normalizePatent()` in `frontend/src/api.js` against the live API.
+
+### 2. Backend automation (private / pending patents)
+
+In a **second terminal**:
+
+```bash
+cd backend-automation
+npm install          # also downloads a browser via "playwright install"
+npm run server       # starts the local bridge on http://127.0.0.1:8787
+```
+
+Now back in the **local** frontend, click **Sync Now**:
+
+1. A real Chrome window opens at Patent Center.
+2. **You** sign in — username, password, and MFA. (Up to 5 minutes.)
+3. Once signed in, the script reads your application workbench and returns the
+   list to the dashboard, which stores it in your browser under **Private /
+   Pending**. A copy is also saved to `backend-automation/output/` (git-ignored).
+
+You can also run the scraper standalone, without the frontend:
+
+```bash
+cd backend-automation
+npm run scrape       # writes output/private-applications.json
+```
+
+Then load that file anywhere (including the public site) via **Import JSON**.
+
+> **Selectors need tuning.** Patent Center is a SPA whose DOM changes over time.
+> `scripts/patent-center.js` marks the workbench/login selectors with
+> `CONFIRM/ADJUST`. Open the site, inspect the applications table, and map the
+> columns. A screenshot is saved to `output/workbench.png` to help.
+
+---
+
+## Deploy the frontend to GitHub Pages
+
+The repo already includes `.github/workflows/deploy.yml`, which builds
+`frontend/` and deploys it on every push to `main`.
+
+1. **Push to GitHub** (this repo's remote is `My-Mechanic/USPTO`):
+   ```bash
+   git add .
+   git commit -m "Add USPTO patent dashboard"
+   git push origin main
+   ```
+2. In GitHub: **Settings → Pages → Build and deployment → Source = GitHub Actions.**
+3. The **Deploy frontend to GitHub Pages** workflow runs (watch the **Actions**
+   tab). When it's green, your site is live at:
+   ```
+   https://my-mechanic.github.io/USPTO/
+   ```
+
+> If your repo name or owner differs, update `base` in `frontend/vite.config.js`
+> **and** the `VITE_BASE` value in `deploy.yml` to `/<your-repo-name>/`.
+
+On the public site, use **Import JSON** to view private data you captured locally.
+
+---
+
+## Security & legal notes
+
+- **No secrets in the repo.** `.env` files and the `.auth/` / `output/` folders
+  are git-ignored. The API key is entered at runtime, never built into the site.
+- **You access only your own account.** The automation simply opens a browser for
+  *you* to log into; it does not bypass MFA or impersonate anyone.
+- **Respect the USPTO Terms of Use.** Automated access to Patent Center should be
+  limited to your own data and reasonable rates. The ODP API has rate limits
+  (HTTP 429) — the app surfaces these.
+- **XSS-safe rendering.** All patent fields are inserted as text nodes / escaped,
+  never as raw HTML.
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `401/403` on fetch | Bad/expired API key — re-copy from MyODP. |
+| `429` on fetch | Rate limited — wait and retry. |
+| Network/CORS error to `api.uspto.gov` | Check connectivity; confirm the key works in the ODP Swagger UI. |
+| "Sync Now" says bridge unreachable | Start it: `cd backend-automation && npm run server`. |
+| "Sync Now" disabled on the live site | Expected — use **Import JSON** there, or run the app locally. |
+| Private list empty after login | Workbench selectors need tuning; see `output/workbench.png` and adjust `scripts/patent-center.js`. |
+| Pages 404 / blank | `base` in `vite.config.js` must equal `/<repo-name>/`; set Pages source to **GitHub Actions**. |

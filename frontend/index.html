@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>USPTO Patent Dashboard</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>USPTO Patent Dashboard</h1>
+      <p class="sub">
+        Your public &amp; private/pending applications — fetched on demand and
+        stored only in this browser.
+      </p>
+    </header>
+
+    <section class="panel">
+      <div class="row">
+        <label class="field grow">
+          <span>USPTO ODP API key</span>
+          <input
+            id="apiKey"
+            type="password"
+            placeholder="X-API-Key from data.uspto.gov"
+            autocomplete="off"
+          />
+        </label>
+        <button id="saveKey" class="btn">Save key</button>
+      </div>
+
+      <div class="row">
+        <label class="field grow">
+          <span>Search public patents by inventor / applicant name</span>
+          <input id="searchName" type="text" placeholder="e.g. Jane Smith" />
+        </label>
+        <button id="fetchBtn" class="btn primary">Fetch public patents</button>
+      </div>
+
+      <details>
+        <summary>Advanced: raw ODP query (overrides the name above)</summary>
+        <label class="field grow">
+          <span>q — ODP simplified syntax</span>
+          <input
+            id="rawQuery"
+            type="text"
+            placeholder="applicationMetaData.inventionTitle:(solar)"
+          />
+        </label>
+      </details>
+
+      <div class="row wrap">
+        <button id="syncBtn" class="btn">Sync Now — private / pending</button>
+        <label class="btn file"
+          >Import JSON<input id="importInput" type="file" accept="application/json" hidden
+        /></label>
+        <button id="exportBtn" class="btn">Export JSON</button>
+        <button id="clearBtn" class="btn danger">Clear local data</button>
+      </div>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="filters">
+      <input id="filterText" type="search" placeholder="Filter by app #, title, status, date…" />
+      <input id="filterStatus" type="text" placeholder="Status contains…" />
+      <select id="sortSel" aria-label="Sort">
+        <option value="filingDate-desc">Filing date ↓</option>
+        <option value="filingDate-asc">Filing date ↑</option>
+        <option value="applicationNumberText-asc">App # ↑</option>
+        <option value="status-asc">Status A–Z</option>
+        <option value="inventionTitle-asc">Title A–Z</option>
+      </select>
+    </section>
+
+    <main class="columns">
+      <section class="col">
+        <h2>Public Patents <span class="count" id="publicCount">0</span></h2>
+        <div id="publicList" class="list"></div>
+      </section>
+      <section class="col">
+        <h2>Private / Pending <span class="count" id="privateCount">0</span></h2>
+        <div id="privateList" class="list"></div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      Data stays in your browser (IndexedDB). Public data: USPTO Open Data Portal.
+      Private data: captured locally via your own authenticated session. Use in
+      accordance with the USPTO Terms of Use.
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

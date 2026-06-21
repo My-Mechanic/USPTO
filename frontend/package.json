@@ -1,0 +1,15 @@
+{
+  "name": "uspto-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "USPTO patent dashboard (public + private/pending). Static SPA for GitHub Pages.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
