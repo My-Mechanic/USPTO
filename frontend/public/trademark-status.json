@@ -1,4 +1,5 @@
 {
-  "generatedAt": "",
+  "generatedAt": "2026-06-21T21:02:58.218Z",
+  "error": "TSDR_API_KEY secret not set — add it in repo Settings → Secrets.",
   "marks": []
 }
