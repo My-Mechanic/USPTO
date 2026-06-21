@@ -12,7 +12,12 @@ const state = {
 const $ = (id) => document.getElementById(id);
 
 async function init() {
-  $('apiKey').value = settings.getApiKey();
+  // Prefer a key already saved in this browser; otherwise fall back to a local,
+  // git-ignored .env (VITE_ODP_API_KEY) so local dev auto-fills. This env value is
+  // NOT set in CI, so it is never baked into the public GitHub Pages bundle.
+  const presetKey = settings.getApiKey() || import.meta.env.VITE_ODP_API_KEY || '';
+  if (presetKey && presetKey !== settings.getApiKey()) settings.setApiKey(presetKey);
+  $('apiKey').value = presetKey;
   state.public = await getPatents('public');
   state.private = await getPatents('private');
   wire();
