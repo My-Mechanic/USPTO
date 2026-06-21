@@ -30,33 +30,39 @@ async function readWatchlist() {
   }
 }
 
-function pick(obj, paths) {
-  for (const p of paths) {
-    const v = p.split('.').reduce((o, k) => (o == null ? o : o[k]), obj);
-    if (v != null && v !== '') return v;
+// Most recent owner name from parties.ownerGroups (verified against TSDR info.json).
+function ownerName(t) {
+  const og = t.parties && t.parties.ownerGroups;
+  if (!og) return '';
+  const groups = Object.values(og);
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const arr = groups[i];
+    if (Array.isArray(arr) && arr.length) {
+      const p = arr[arr.length - 1];
+      if (p && p.name) return p.name;
+    }
   }
   return '';
 }
 
+// Field paths verified against a live TSDR info.json response (serial 75554461).
 function normalize(serial, j) {
-  // TSDR shapes seen in the wild: { trademarks: [ { status, metadata } ] } or flat.
-  const t = (j.trademarks && j.trademarks[0]) || j;
-  const status = t.status || {};
-  const meta = t.metadata || t.metaData || {};
+  const t = (j.trademarks && j.trademarks[0]) || {};
+  const s = t.status || {};
+  const statusText =
+    s.tm5StatusDesc || s.extStatusDesc || (s.status != null ? `Status code ${s.status}` : '');
   const out = {
     serialNumber: serial,
-    markText: pick(t, ['status.markElement', 'metadata.markElement', 'markElement']) ||
-      pick(status, ['markElement']) || pick(meta, ['markElement']) || '',
-    owner: pick(t, ['status.currentOwner', 'metadata.partyName', 'metadata.ownerName']) ||
-      pick(status, ['ownerName']) || '',
-    status: pick(t, ['status.statusDefinitionText', 'status.tmStatusDescription', 'status.statusText', 'status.markCurrentStatusExternalDescriptionText']) ||
-      pick(status, ['statusText']) || '',
-    statusDate: pick(t, ['status.statusDate', 'status.markCurrentStatusDate']) || '',
-    filingDate: pick(t, ['status.applicationDate', 'metadata.applicationDate', 'metadata.filingDate']) || '',
-    registrationNumber: pick(t, ['status.usRegistrationNumber', 'metadata.registrationNumber']) || '',
-    registrationDate: pick(t, ['status.registrationDate', 'metadata.registrationDate']) || '',
+    markText: s.markElement || '',
+    owner: ownerName(t),
+    status: statusText,
+    statusDate: s.statusDate || '',
+    filingDate: s.filingDate || '',
+    registrationNumber: s.usRegistrationNumber || '',
+    registrationDate: s.usRegistrationDate || '',
   };
-  if (!out.status && !out.markText) out._note = 'Could not parse TSDR fields — adjust pick() paths in scripts/monitor-trademarks.mjs.';
+  if (!out.status && !out.markText)
+    out._note = 'Could not parse TSDR fields — check scripts/monitor-trademarks.mjs.';
   return out;
 }
 
