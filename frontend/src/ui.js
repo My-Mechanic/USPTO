@@ -179,6 +179,7 @@ export function renderTrademarkDetail(t) {
   ]));
   root.appendChild(detailSection('Status & dates', [
     ['Status', t.status || (t.pending ? 'awaiting first check' : '')],
+    ['Latest action', t.statusDetail],
     ['Status date', t.statusDate],
     ['Filing date', t.filingDate],
     ['Registration date', t.registrationDate],

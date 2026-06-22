@@ -60,11 +60,16 @@ function parseStatusView(serial, html) {
   const lines = htmlToLines(html);
   const after = (label) => { const i = lines.indexOf(label); return i >= 0 && i + 1 < lines.length ? lines[i + 1] : ''; };
   const reg = after('US Registration Number:');
+  // Prefer the standardized TM5 descriptor for `status` (stable across events);
+  // keep the prose "Status:" line as statusDetail.
+  const tm5 = after('TM5 Common Status Descriptor:');
+  const sentence = after('Status:');
   return {
     serialNumber: serial,
     markText: after('Mark Literal Elements:') || after('Mark:') || '',
     owner: after('Owner Name:') || after('Holder Name:') || '',
-    status: after('Status:') || after('TM5 Common Status Descriptor:') || '',
+    status: tm5 || sentence || '',
+    statusDetail: sentence && sentence !== tm5 ? sentence : '',
     statusDate: parseDate(after('Status Date:')),
     filingDate: parseDate(after('Application Filing Date:')),
     registrationNumber: /^\d+$/.test(reg) ? reg : '',
