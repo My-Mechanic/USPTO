@@ -18,6 +18,27 @@ watchlist by number and the app tracks their status and flags updates — it is
 > (`localStorage` / `IndexedDB`). Trademark *status* (public data) is published by
 > the Action. No credentials or private patent data touch any server or this repo.
 
+## What it does for inventors
+
+- **Status-change alerts.** Desktop/browser notifications fire when a tracked patent or
+  trademark changes status while the site is open (it can **auto-check** on a schedule).
+  Every change is also kept in a persistent **activity log**.
+- **Deadline tracker — the one that saves your IP.** Auto-computes the dates you can't
+  miss: patent **maintenance fees** (3.5 / 7.5 / 11.5 years after grant) and trademark
+  **§8 / §9 / §15** post-registration deadlines. The **Dashboard** flags anything due soon,
+  in its grace period, or lapsed.
+- **Add to your calendar.** Export all deadlines as a `.ics` file (with 30-day reminders)
+  for Google / Apple / Outlook Calendar.
+- **Background email alerts.** The daily trademark Action opens a GitHub issue when status
+  changes — GitHub emails you, no extra setup. An **opt-in** patent monitor does the same for
+  patents (export `patent-watchlist.json`, commit it, add the `ODP_API_KEY` secret).
+- **Portfolio dashboard** with counts (granted vs pending, registered vs pending), upcoming
+  deadlines, and recent activity.
+- **Notes & tags** per patent, a **prosecution-history timeline**, and **CSV/JSON export** of
+  your whole portfolio.
+- **Installable PWA.** Add it to your phone/desktop home screen; works offline (shows
+  last-known data).
+
 ## Telling same-name inventors apart
 
 Don't know your application number? **Find your patent (search to add)** combines

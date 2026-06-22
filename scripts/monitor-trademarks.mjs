@@ -16,9 +16,34 @@ import fs from 'node:fs/promises';
 const KEY = process.env.TSDR_API_KEY || '';
 const WATCHLIST = 'data/trademark-watchlist.json';
 const OUT = 'frontend/public/trademark-status.json';
+const HISTORY = 'data/trademark-history.json';
+const CHANGES_MD = 'trademark-changes.md'; // consumed by the workflow to open an issue
 const ENDPOINT = (serial) => `https://tsdrapi.uspto.gov/ts/cd/casestatus/sn${serial}/info.json`;
 
 const nowISO = new Date().toISOString();
+
+// Read whatever we published last run, so we can diff status changes.
+async function readPrevious() {
+  try {
+    const prev = JSON.parse(await fs.readFile(OUT, 'utf8'));
+    const map = new Map();
+    for (const m of prev.marks || []) map.set(String(m.serialNumber), m);
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+// Append detected changes to a small rolling history file (kept in the repo).
+async function appendHistory(changes) {
+  if (!changes.length) return;
+  let hist = [];
+  try { hist = JSON.parse(await fs.readFile(HISTORY, 'utf8')); } catch {}
+  if (!Array.isArray(hist)) hist = [];
+  for (const c of changes) hist.unshift({ at: nowISO, ...c });
+  if (hist.length > 1000) hist.length = 1000;
+  await fs.writeFile(HISTORY, JSON.stringify(hist, null, 2));
+}
 
 async function readWatchlist() {
   try {
@@ -76,12 +101,51 @@ async function fetchOne(serial) {
   return normalize(serial, j);
 }
 
+// Compare new marks against the previous run; return human-meaningful changes.
+function diff(prev, marks) {
+  const changes = [];
+  for (const m of marks) {
+    const before = prev.get(String(m.serialNumber));
+    if (!before) continue; // first time we see it — not a "change"
+    if (before.status && m.status && before.status !== m.status) {
+      changes.push({ serialNumber: m.serialNumber, markText: m.markText || before.markText || '', field: 'status', from: before.status, to: m.status });
+    }
+    if (!before.registrationNumber && m.registrationNumber) {
+      changes.push({ serialNumber: m.serialNumber, markText: m.markText || '', field: 'registration', from: '(pending)', to: m.registrationNumber });
+    }
+  }
+  return changes;
+}
+
+async function writeChangesMd(changes) {
+  if (!changes.length) {
+    await fs.writeFile(CHANGES_MD, '');
+    return;
+  }
+  const lines = [
+    '### Trademark status updates',
+    '',
+    `${changes.length} change(s) detected on ${nowISO.slice(0, 10)}:`,
+    '',
+    ...changes.map((c) =>
+      c.field === 'registration'
+        ? `- **${c.markText || c.serialNumber}** (serial ${c.serialNumber}) — **registered** as #${c.to}.`
+        : `- **${c.markText || c.serialNumber}** (serial ${c.serialNumber}): \`${c.from}\` → \`${c.to}\``
+    ),
+    '',
+    '_Automated by the Monitor trademarks workflow. View details on the dashboard._',
+  ];
+  await fs.writeFile(CHANGES_MD, lines.join('\n'));
+}
+
 async function main() {
   const serials = await readWatchlist();
   await fs.mkdir('frontend/public', { recursive: true });
+  const prev = await readPrevious();
 
   if (!KEY) {
-    await write({ error: 'TSDR_API_KEY secret not set — add it in repo Settings → Secrets.', marks: serials.map((s) => ({ serialNumber: s, status: 'awaiting TSDR key', markText: '' })) });
+    await write({ error: 'TSDR_API_KEY secret not set — add it in repo Settings → Secrets.', marks: serials.map((s) => ({ serialNumber: s, status: 'awaiting TSDR key', markText: '' })), changes: [] });
+    await writeChangesMd([]);
     console.log('No TSDR_API_KEY; wrote placeholder status for', serials.length, 'serial(s).');
     return;
   }
@@ -97,8 +161,11 @@ async function main() {
     // be polite to TSDR
     await new Promise((r) => setTimeout(r, 400));
   }
-  await write({ marks });
-  console.log(`Wrote ${marks.length} trademark status record(s) to ${OUT}.`);
+  const changes = diff(prev, marks);
+  await write({ marks, changes });
+  await appendHistory(changes);
+  await writeChangesMd(changes);
+  console.log(`Wrote ${marks.length} status record(s); ${changes.length} change(s) detected.`);
 }
 
 async function write(payload) {

@@ -2,13 +2,21 @@ import { fetchPatent, searchApplications, buildPatentQuery, patentSnapshot } fro
 import { saveRecords, getRecords, deleteRecord, clearAll, settings } from './db.js';
 import { syncPrivate, bridgeAvailableHere } from './sync.js';
 import { loadTrademarkStatus, tmWatch } from './trademarks.js';
-import { renderWatchlist, renderResults, renderTrademarks, setStatus } from './ui.js';
+import { renderWatchlist, renderResults, renderTrademarks, setStatus, patentsToCSV, trademarksToCSV } from './ui.js';
+import { renderDashboard } from './dashboard.js';
+import { allDeadlines } from './deadlines.js';
+import { downloadICS } from './ics.js';
+import {
+  notifyPrefs, notificationsSupported, permissionState, requestPermission,
+  fire, getActivity, clearActivity,
+} from './notify.js';
 
 const state = {
   patents: [],
   marks: [],
   tmGeneratedAt: '',
   pFilter: { text: '', state: '', country: '', sort: 'filingDate-desc' },
+  autoTimer: null,
 };
 const $ = (id) => document.getElementById(id);
 
@@ -21,11 +29,22 @@ async function init() {
   wireTabs();
   wirePatents();
   wireTrademarks();
+  wireDashboard();
+  registerServiceWorker();
   if (!bridgeAvailableHere()) $('syncBtn').title = 'Live private sync works only when running locally.';
 
   refreshPatents();
   await refreshTrademarks();
+  refreshDashboard();
+  scheduleAutoCheck();
   setStatus('Add your patents and trademarks to start monitoring them.');
+
+  // Run an auto-check shortly after load if enabled (lets the UI paint first).
+  const prefs = notifyPrefs.get();
+  if (prefs.autoCheck && state.patents.length && settings.getApiKey()) {
+    setTimeout(() => onCheckAll({ silent: true }), 1500);
+  }
+  notifyDueDeadlines();
 }
 
 /* ---------------- tabs + key ---------------- */
@@ -33,8 +52,10 @@ function wireTabs() {
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.onclick = () => {
       document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
+      $('tab-dashboard').hidden = btn.dataset.tab !== 'dashboard';
       $('tab-patents').hidden = btn.dataset.tab !== 'patents';
       $('tab-trademarks').hidden = btn.dataset.tab !== 'trademarks';
+      if (btn.dataset.tab === 'dashboard') refreshDashboard();
     };
   });
   $('saveKey').onclick = () => {
@@ -47,7 +68,7 @@ function wireTabs() {
 function wirePatents() {
   $('addBtn').onclick = onAddByNumber;
   $('addNum').addEventListener('keydown', (e) => { if (e.key === 'Enter') onAddByNumber(); });
-  $('checkAll').onclick = onCheckAll;
+  $('checkAll').onclick = () => onCheckAll();
   $('syncBtn').onclick = onSyncPrivate;
   $('pImport').onchange = onImport;
   $('pExport').onclick = onExport;
@@ -83,42 +104,60 @@ async function onAddByNumber() {
   }
 }
 
+// Preserve user-owned fields (notes/tags/addedAt) across re-fetches.
+function carryUserFields(fresh, old) {
+  return {
+    ...fresh,
+    addedAt: old ? old.addedAt : new Date().toISOString(),
+    note: old ? old.note || '' : '',
+    tags: old ? old.tags || [] : [],
+  };
+}
+
 async function addPatent(p) {
   const existing = state.patents.find((x) => x.applicationNumberText === p.applicationNumberText);
   const rec = {
-    ...p,
-    addedAt: existing ? existing.addedAt : new Date().toISOString(),
+    ...carryUserFields(p, existing),
     lastChecked: new Date().toISOString(),
     snapshot: patentSnapshot(p),
-    changed: false,
-    changeNote: '',
+    changed: existing ? existing.changed : false,
+    changeNote: existing ? existing.changeNote || '' : '',
   };
   await saveRecords([rec]);
   state.patents = await getRecords();
   refreshPatents();
+  refreshDashboard();
 }
 
-async function onCheckAll() {
+async function onCheckAll({ silent = false } = {}) {
   const apiKey = apiKeyOrWarn();
   if (!apiKey) return;
-  if (!state.patents.length) return setStatus('Nothing to check yet.', 'error');
-  setStatus('Checking your patents for updates…');
+  if (!state.patents.length) return silent ? null : setStatus('Nothing to check yet.', 'error');
+  if (!silent) setStatus('Checking your patents for updates…');
   let changed = 0;
   for (const old of state.patents) {
     try {
       const fresh = await fetchPatent({ apiKey, number: old.applicationNumberText, type: 'application' });
       const snap = patentSnapshot(fresh);
       const didChange = old.snapshot && snap !== old.snapshot;
-      if (didChange) changed++;
+      if (didChange) {
+        changed++;
+        const note = `Status/event changed: ${fresh.status} — ${fresh.latestEvent || ''}`.trim();
+        fire({
+          title: `Patent update: ${fresh.inventionTitle || fresh.applicationNumberText}`,
+          body: note,
+          tag: `patent-${fresh.applicationNumberText}`,
+          kind: 'change',
+          refId: fresh.applicationNumberText,
+          url: fresh.link,
+        });
+      }
       await saveRecords([{
-        ...fresh,
-        addedAt: old.addedAt,
+        ...carryUserFields(fresh, old),
         lastChecked: new Date().toISOString(),
         snapshot: snap,
         changed: didChange || old.changed,
-        changeNote: didChange
-          ? `Status/event changed: ${fresh.status} — ${fresh.latestEvent || ''}`.trim()
-          : old.changeNote || '',
+        changeNote: didChange ? `Status/event changed: ${fresh.status} — ${fresh.latestEvent || ''}`.trim() : old.changeNote || '',
       }]);
     } catch (e) {
       // keep going; one failure shouldn't stop the batch
@@ -126,7 +165,10 @@ async function onCheckAll() {
   }
   state.patents = await getRecords();
   refreshPatents();
-  setStatus(changed ? `${changed} application(s) have updates — highlighted below.` : 'Checked. No changes since last time.', 'ok');
+  refreshDashboard();
+  const msg = changed ? `${changed} application(s) have updates — highlighted below.` : 'Checked. No changes since last time.';
+  if (!silent || changed) setStatus(msg, 'ok');
+  notifyDueDeadlines();
 }
 
 async function onSyncPrivate() {
@@ -171,6 +213,7 @@ async function onImport(e) {
     await saveRecords(items);
     state.patents = await getRecords();
     refreshPatents();
+    refreshDashboard();
     setStatus(`Imported ${items.length} patent(s).`, 'ok');
   } catch (err) {
     setStatus('Import failed: ' + err.message, 'error');
@@ -187,13 +230,14 @@ async function onClearAll() {
   await clearAll();
   state.patents = [];
   refreshPatents();
+  refreshDashboard();
   setStatus('My Patents cleared.', 'ok');
 }
 
 function patentView() {
   const { text, state: st, country, sort } = state.pFilter;
   const out = state.patents.filter((p) => {
-    const hay = `${p.applicationNumberText} ${p.inventionTitle} ${p.status} ${p.assignee} ${p.inventors}`.toLowerCase();
+    const hay = `${p.applicationNumberText} ${p.inventionTitle} ${p.status} ${p.assignee} ${p.inventors} ${(p.tags || []).join(' ')} ${p.note || ''}`.toLowerCase();
     return (!text || hay.includes(text)) && (!st || p.inventorState === st) && (!country || p.inventorCountry === country);
   });
   const [key, dir] = sort.split('-');
@@ -209,8 +253,14 @@ function refreshPatents() {
   populateFacets();
   const view = patentView();
   renderWatchlist($('watchlist'), view, {
-    onRemove: async (p) => { await deleteRecord(p.applicationNumberText); state.patents = await getRecords(); refreshPatents(); setStatus('Removed.', 'ok'); },
+    onRemove: async (p) => { await deleteRecord(p.applicationNumberText); state.patents = await getRecords(); refreshPatents(); refreshDashboard(); setStatus('Removed.', 'ok'); },
     onCheck: async (p) => { await recheckOne(p); },
+    onSaveNote: async (p, { note, tags }) => {
+      await saveRecords([{ ...p, note, tags }]);
+      state.patents = await getRecords();
+      refreshPatents();
+      setStatus('Note saved.', 'ok');
+    },
   });
   $('patCount').textContent = view.length;
 }
@@ -223,9 +273,17 @@ async function recheckOne(p) {
     const fresh = await fetchPatent({ apiKey, number: p.applicationNumberText, type: 'application' });
     const snap = patentSnapshot(fresh);
     const didChange = p.snapshot && snap !== p.snapshot;
-    await saveRecords([{ ...fresh, addedAt: p.addedAt, lastChecked: new Date().toISOString(), snapshot: snap, changed: didChange || p.changed, changeNote: didChange ? `Status/event changed: ${fresh.status} — ${fresh.latestEvent || ''}`.trim() : p.changeNote || '' }]);
+    if (didChange) {
+      fire({
+        title: `Patent update: ${fresh.inventionTitle || fresh.applicationNumberText}`,
+        body: `Status/event changed: ${fresh.status} — ${fresh.latestEvent || ''}`.trim(),
+        tag: `patent-${fresh.applicationNumberText}`, kind: 'change', refId: fresh.applicationNumberText, url: fresh.link,
+      });
+    }
+    await saveRecords([{ ...carryUserFields(fresh, p), lastChecked: new Date().toISOString(), snapshot: snap, changed: didChange || p.changed, changeNote: didChange ? `Status/event changed: ${fresh.status} — ${fresh.latestEvent || ''}`.trim() : p.changeNote || '' }]);
     state.patents = await getRecords();
     refreshPatents();
+    refreshDashboard();
     setStatus(didChange ? 'Update found — highlighted.' : 'No change.', 'ok');
   } catch (e) { setStatus(e.message, 'error'); }
 }
@@ -251,13 +309,29 @@ function wireTrademarks() {
 }
 
 async function refreshTrademarks() {
+  const prevBySerial = new Map(state.marks.map((m) => [m.serialNumber, m]));
   const { generatedAt, error, marks } = await loadTrademarkStatus();
+  // Detect changes vs what we last saw (the published JSON already reflects the
+  // server-side monitor; this surfaces a desktop toast on first sight of a change).
+  if (state.tmGeneratedAt && generatedAt && generatedAt !== state.tmGeneratedAt) {
+    for (const m of marks) {
+      const prev = prevBySerial.get(m.serialNumber);
+      if (prev && prev.status && m.status && prev.status !== m.status) {
+        fire({
+          title: `Trademark update: ${m.markText || m.serialNumber}`,
+          body: `Status changed to “${m.status}”.`,
+          tag: `tm-${m.serialNumber}`, kind: 'change', refId: m.serialNumber, url: m.link,
+        });
+      }
+    }
+  }
   state.marks = marks;
   state.tmGeneratedAt = generatedAt;
   $('tmGenerated').textContent = error
     ? `⚠ ${error}`
     : generatedAt ? `Last checked by the monitor: ${new Date(generatedAt).toLocaleString()}` : 'Not monitored yet — add serials, commit the watchlist, run the Action.';
   renderTM();
+  refreshDashboard();
 }
 
 function onTmAdd() {
@@ -275,7 +349,6 @@ function onTmDownload() {
 }
 
 function renderTM() {
-  // Merge monitored marks with watchlist serials that have no status yet.
   const filter = $('tmFilter').value.toLowerCase();
   const bySerial = new Map(state.marks.map((m) => [m.serialNumber, m]));
   const rows = tmWatch.list().map((s) => bySerial.get(s) || { serialNumber: s, markText: '(pending)', pending: true, link: `https://tsdr.uspto.gov/#caseNumber=${s}&caseType=SERIAL_NO&searchType=statusSearch` });
@@ -287,9 +360,123 @@ function renderTM() {
   $('tmCount').textContent = view.length;
 }
 
+/* ---------------- dashboard + notifications ---------------- */
+function wireDashboard() {
+  const prefs = notifyPrefs.get();
+  $('notifEnabled').checked = prefs.enabled;
+  $('autoCheck').checked = prefs.autoCheck;
+  $('intervalHours').value = prefs.intervalHours;
+  $('deadlineDays').value = prefs.deadlineDays;
+  updatePermLabel();
+
+  $('notifEnabled').onchange = async (e) => {
+    if (e.target.checked) {
+      const perm = await requestPermission();
+      if (perm !== 'granted') {
+        e.target.checked = false;
+        setStatus(perm === 'unsupported' ? 'This browser does not support notifications.' : 'Notification permission denied — enable it in your browser settings.', 'error');
+      } else {
+        notifyPrefs.set({ enabled: true });
+        fire({ title: 'Notifications on', body: 'You’ll be alerted to status changes and deadlines.', tag: 'test', kind: 'info' });
+        setStatus('Desktop notifications enabled.', 'ok');
+      }
+    } else {
+      notifyPrefs.set({ enabled: false });
+    }
+    updatePermLabel();
+  };
+  $('autoCheck').onchange = (e) => { notifyPrefs.set({ autoCheck: e.target.checked }); scheduleAutoCheck(); };
+  $('intervalHours').onchange = (e) => { notifyPrefs.set({ intervalHours: clampNum(e.target.value, 1, 168, 12) }); scheduleAutoCheck(); };
+  $('deadlineDays').onchange = (e) => { notifyPrefs.set({ deadlineDays: clampNum(e.target.value, 7, 365, 120) }); };
+
+  $('exportIcs').onclick = () => {
+    const dl = allDeadlines(state.patents, state.marks);
+    if (!dl.length) return setStatus('No deadlines to export yet (need granted patents or registered trademarks).', 'error');
+    downloadICS(dl);
+    setStatus(`Exported ${dl.length} deadline(s) to uspto-deadlines.ics — import it into your calendar.`, 'ok');
+  };
+  $('exportPatentsCsv').onclick = () => { downloadText('my-patents.csv', patentsToCSV(state.patents), 'text/csv'); setStatus('Patents exported to CSV.', 'ok'); };
+  $('exportTmCsv').onclick = () => { downloadText('my-trademarks.csv', trademarksToCSV(state.marks), 'text/csv'); setStatus('Trademarks exported to CSV.', 'ok'); };
+  $('exportPatentWatch').onclick = () => {
+    const list = state.patents.map((p) => p.applicationNumberText).filter(Boolean);
+    if (!list.length) return setStatus('Add patents first, then export the watchlist.', 'error');
+    download('patent-watchlist.json', list);
+    setStatus('Commit this to data/patent-watchlist.json and set the ODP_API_KEY secret to enable patent email alerts.', 'ok');
+  };
+  $('clearActivity').onclick = () => { clearActivity(); refreshDashboard(); setStatus('Activity log cleared.', 'ok'); };
+}
+
+function updatePermLabel() {
+  const el = $('permState');
+  if (!el) return;
+  const s = permissionState();
+  el.textContent = !notificationsSupported() ? 'Notifications unsupported in this browser'
+    : s === 'granted' ? '● Permission granted' : s === 'denied' ? '● Blocked in browser settings' : '○ Permission not requested';
+}
+
+function refreshDashboard() {
+  const deadlines = allDeadlines(state.patents, state.marks);
+  renderDashboard($('dashboard'), { patents: state.patents, marks: state.marks, deadlines, activity: getActivity() });
+}
+
+function scheduleAutoCheck() {
+  if (state.autoTimer) clearInterval(state.autoTimer);
+  const prefs = notifyPrefs.get();
+  if (!prefs.autoCheck) return;
+  const ms = Math.max(1, prefs.intervalHours) * 3600 * 1000;
+  state.autoTimer = setInterval(() => {
+    if (state.patents.length && settings.getApiKey()) onCheckAll({ silent: true });
+    refreshTrademarks();
+  }, ms);
+}
+
+// Toast (and log) deadlines entering the warning window, at most once per day each.
+function notifyDueDeadlines() {
+  const prefs = notifyPrefs.get();
+  const warnDays = prefs.deadlineDays || 120;
+  const today = new Date();
+  const seenKey = 'uspto_dl_seen';
+  let seen = {};
+  try { seen = JSON.parse(localStorage.getItem(seenKey) || '{}'); } catch {}
+  const todayStr = today.toISOString().slice(0, 10);
+  const dls = allDeadlines(state.patents, state.marks, today);
+  for (const d of dls) {
+    if (!['due-soon', 'grace', 'lapsed'].includes(d.urgency.state)) continue;
+    if (d.urgency.daysToDue != null && d.urgency.daysToDue > warnDays) continue;
+    const key = `${d.kind}-${d.refId}-${d.label}`;
+    if (seen[key] === todayStr) continue;
+    seen[key] = todayStr;
+    fire({
+      title: `Deadline: ${d.label}`,
+      body: `${d.refTitle} — ${d.urgency.badge}. Due ${d.dueDate}.`,
+      tag: key, kind: 'deadline', refId: d.refId, url: d.payLink,
+    });
+  }
+  localStorage.setItem(seenKey, JSON.stringify(seen));
+  refreshDashboard();
+}
+
+function clampNum(v, min, max, dflt) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return dflt;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+/* ---------------- PWA ---------------- */
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  const base = import.meta.env.BASE_URL || '/';
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register(`${base}sw.js`, { scope: base }).catch(() => {});
+  });
+}
+
 /* ---------------- shared ---------------- */
 function download(name, obj) {
-  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
+  downloadText(name, JSON.stringify(obj, null, 2), 'application/json');
+}
+function downloadText(name, text, type) {
+  const blob = new Blob([text], { type });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = name; a.click();
   URL.revokeObjectURL(a.href);

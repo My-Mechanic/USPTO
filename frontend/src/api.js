@@ -89,6 +89,12 @@ export function normalizePatent(entry) {
   const events = Array.isArray(entry.eventDataBag) ? entry.eventDataBag : [];
   let latest = null;
   for (const e of events) if (!latest || (e.eventDate || '') > (latest.eventDate || '')) latest = e;
+  // Keep a compact, sorted prosecution history for the timeline view.
+  const timeline = events
+    .map((e) => ({ date: e.eventDate || '', description: e.eventDescriptionText || e.eventCode || '' }))
+    .filter((e) => e.date || e.description)
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    .slice(0, 40);
 
   return {
     applicationNumberText: appNum,
@@ -109,6 +115,7 @@ export function normalizePatent(entry) {
     inventorCountry: addr.countryCode || '',
     latestEvent: latest ? latest.eventDescriptionText || '' : '',
     latestEventDate: latest ? latest.eventDate || '' : '',
+    timeline,
     link: patentLink(m),
     source: 'public',
   };

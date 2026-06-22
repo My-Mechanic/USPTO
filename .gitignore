@@ -5,6 +5,10 @@ dist/
 *.log
 .DS_Store
 
+# Transient change summaries written by the monitor workflows (consumed in-run)
+trademark-changes.md
+patent-changes.md
+
 # Playwright / automation artifacts (may contain private data — never commit)
 playwright-report/
 test-results/

@@ -1,0 +1,61 @@
+name: Monitor patents (opt-in email alerts)
+
+# OPT-IN background patent monitor. Watches data/patent-watchlist.json daily and
+# opens an issue (→ email) when a tracked application's status/event changes.
+#
+# Requires the ODP_API_KEY repo secret AND a committed data/patent-watchlist.json.
+# The script no-ops harmlessly if either is missing, so this workflow is safe to
+# leave in place even if you never opt in.
+on:
+  schedule:
+    - cron: '30 11 * * *' # daily, just after the trademark monitor
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'data/patent-watchlist.json'
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Fetch patent status from ODP
+        env:
+          ODP_API_KEY: ${{ secrets.ODP_API_KEY }}
+        run: node scripts/monitor-patents.mjs
+
+      - name: Persist status + history
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add frontend/public/patent-status.json data/patent-history.json 2>/dev/null || true
+          git diff --quiet --cached || git commit -m "chore: refresh patent status [skip ci]"
+          git push || true
+
+      - name: Notify on changes (open an issue)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('patent-changes.md')) { core.info('No changes file.'); return; }
+            const body = fs.readFileSync('patent-changes.md', 'utf8').trim();
+            if (!body) { core.info('No patent changes.'); return; }
+            const today = new Date().toISOString().slice(0, 10);
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Patent status update — ${today}`,
+              body,
+              labels: ['patent-update'],
+            });
+            core.info('Opened an issue for patent changes.');

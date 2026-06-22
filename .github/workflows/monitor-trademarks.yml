@@ -15,6 +15,7 @@ permissions:
   contents: write
   pages: write
   id-token: write
+  issues: write
 
 concurrency:
   group: pages
@@ -39,9 +40,29 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add frontend/public/trademark-status.json
+          git add frontend/public/trademark-status.json data/trademark-history.json
           git diff --quiet --cached || git commit -m "chore: refresh trademark status [skip ci]"
           git push
+
+      # When statuses changed, open an issue. GitHub emails the repo owner/watchers,
+      # so this doubles as a free "email me on trademark updates" channel.
+      - name: Notify on changes (open an issue)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (!fs.existsSync('trademark-changes.md')) { core.info('No changes file.'); return; }
+            const body = fs.readFileSync('trademark-changes.md', 'utf8').trim();
+            if (!body) { core.info('No trademark changes.'); return; }
+            const today = new Date().toISOString().slice(0, 10);
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Trademark status update — ${today}`,
+              body,
+              labels: ['trademark-update'],
+            });
+            core.info('Opened an issue for trademark changes.');
 
       - name: Build site (bundles trademark-status.json)
         working-directory: frontend

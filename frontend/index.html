@@ -4,6 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>My USPTO Portfolio</title>
+    <meta name="description" content="Track your own patents & trademarks and get alerts on status changes and filing deadlines." />
+    <meta name="theme-color" content="#0f1115" />
+    <link rel="manifest" href="manifest.webmanifest" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -22,12 +25,49 @@
     </section>
 
     <nav class="tabs">
-      <button class="tab active" data-tab="patents">My Patents</button>
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="patents">My Patents</button>
       <button class="tab" data-tab="trademarks">My Trademarks</button>
     </nav>
 
+    <!-- ===================== DASHBOARD ===================== -->
+    <div id="tab-dashboard" class="tabpanel">
+      <section class="panel">
+        <div class="col-head">
+          <h3 class="panel-h">Notifications &amp; reminders</h3>
+          <span id="permState" class="muted small"></span>
+        </div>
+        <p class="hint">
+          Get desktop alerts when a tracked patent/trademark changes status or a filing
+          deadline approaches. Alerts fire while this site is open and auto-checks.
+          Background email alerts are handled by the GitHub Actions (see README).
+        </p>
+        <div class="row wrap">
+          <label class="chk"><input type="checkbox" id="notifEnabled" /> Enable desktop notifications</label>
+          <label class="chk"><input type="checkbox" id="autoCheck" /> Auto-check for updates on load</label>
+          <label class="field"><span>Re-check every (hours)</span><input id="intervalHours" type="number" min="1" max="168" /></label>
+          <label class="field"><span>Warn this many days before a deadline</span><input id="deadlineDays" type="number" min="7" max="365" /></label>
+        </div>
+        <div class="row wrap">
+          <button id="exportIcs" class="btn">Export deadlines to calendar (.ics)</button>
+          <button id="exportPatentsCsv" class="btn">Export patents (CSV)</button>
+          <button id="exportTmCsv" class="btn">Export trademarks (CSV)</button>
+          <button id="exportPatentWatch" class="btn">Patent watchlist.json (for email alerts)</button>
+          <button id="clearActivity" class="btn ghost">Clear activity log</button>
+        </div>
+        <p class="hint">
+          Want background <strong>email</strong> alerts for patents too (even when this site is closed)?
+          Export <code>patent-watchlist.json</code>, commit it to <code>data/patent-watchlist.json</code>,
+          and add your ODP key as the <code>ODP_API_KEY</code> repo secret. The daily
+          <em>Monitor patents</em> Action then emails you on any change. Off until you opt in.
+        </p>
+      </section>
+
+      <div id="dashboard"></div>
+    </div>
+
     <!-- ===================== PATENTS ===================== -->
-    <div id="tab-patents" class="tabpanel">
+    <div id="tab-patents" class="tabpanel" hidden>
       <section class="panel">
         <h3 class="panel-h">Add a patent to track</h3>
         <div class="row wrap">
