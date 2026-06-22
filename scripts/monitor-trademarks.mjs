@@ -19,20 +19,57 @@ const OUT = 'frontend/public/trademark-status.json';
 const HISTORY = 'data/trademark-history.json';
 const CHANGES_MD = 'trademark-changes.md'; // consumed by the workflow to open an issue
 
-// USPTO moved TSDR during the June 2026 ODP migration; the exact live path has
-// shifted, so we try several known shapes and use whichever returns real JSON.
-// Order = most-likely-current first.
+// The keyed TSDR REST API (tsdrapi.uspto.gov/ts/cd/casestatus/*) was taken down in
+// the June 2026 ODP migration and currently returns gateway stubs for every serial.
+// The public status page is still served and contains the same data, so we parse
+// that as the primary source — no API key required — and keep the keyed JSON API
+// as a fallback for when USPTO restores it.
+const STATUSVIEW = (s) => `https://tsdr.uspto.gov/statusview/sn${s}`;
 const ENDPOINTS = [
   (s) => `https://tsdrapi.uspto.gov/ts/cd/casestatus/sn${s}/info.json`,
   (s) => `https://tsdrapi.uspto.gov/ts/cd/casestatus/sn${s}/info`,
-  (s) => `https://tsdrapi.uspto.gov/ts/cd/casestatus/${s}/info`,
 ];
+const UA = 'Mozilla/5.0 (compatible; USPTO-Portfolio-Monitor/1.0; personal trademark status)';
 
-// A "gateway stub" is the load-balancer's canned reply when the TSDR backend is
-// offline or the key isn't entitled to TSDR — not real data.
+// A "gateway stub" is the load-balancer's canned reply when the keyed TSDR backend
+// is offline or the key isn't entitled to TSDR — not real data.
 function looksLikeGatewayStub(text) {
   const t = (text || '').trim();
   return !t || t.startsWith('BACKEND RESPONSE STATUS') || t.startsWith('Default fixed response') || t.startsWith('<');
+}
+
+const MONTHS = { Jan: 1, Feb: 2, Mar: 3, Apr: 4, May: 5, Jun: 6, Jul: 7, Aug: 8, Sep: 9, Oct: 10, Nov: 11, Dec: 12 };
+// "Jul. 26, 2017" / "May 08, 2018" -> "2017-07-26"
+function parseDate(s) {
+  const m = /([A-Za-z]{3})\.?\s+(\d{1,2}),\s+(\d{4})/.exec(s || '');
+  if (!m || !MONTHS[m[1]]) return '';
+  return `${m[3]}-${String(MONTHS[m[1]]).padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+}
+
+// Flatten the server-rendered status page into clean text lines (label / value
+// alternate), then read the value that follows an exact label line.
+function htmlToLines(h) {
+  const text = h
+    .replace(/<[^>]+>/g, '\n')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ');
+  return text.split('\n').map((x) => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+}
+
+function parseStatusView(serial, html) {
+  const lines = htmlToLines(html);
+  const after = (label) => { const i = lines.indexOf(label); return i >= 0 && i + 1 < lines.length ? lines[i + 1] : ''; };
+  const reg = after('US Registration Number:');
+  return {
+    serialNumber: serial,
+    markText: after('Mark Literal Elements:') || after('Mark:') || '',
+    owner: after('Owner Name:') || after('Holder Name:') || '',
+    status: after('Status:') || after('TM5 Common Status Descriptor:') || '',
+    statusDate: parseDate(after('Status Date:')),
+    filingDate: parseDate(after('Application Filing Date:')),
+    registrationNumber: /^\d+$/.test(reg) ? reg : '',
+    registrationDate: parseDate(after('Registration Date:')),
+  };
 }
 
 const nowISO = new Date().toISOString();
@@ -106,38 +143,39 @@ function normalize(serial, j) {
   return out;
 }
 
-// Try each endpoint shape until one returns real JSON. Returns
-// { mark, unavailable } so the caller can tell "USPTO is down" apart from
-// "this serial genuinely wasn't found".
+// Resolve one serial. Returns { mark, unavailable } so the caller can tell
+// "USPTO is down" apart from "this serial genuinely wasn't found".
 async function fetchOne(serial) {
-  let sawGatewayStub = false;
-  let lastCode = 0;
-  for (const build of ENDPOINTS) {
-    let res, body;
-    try {
-      res = await fetch(build(serial), { headers: { 'USPTO-API-KEY': KEY, Accept: 'application/json' } });
-      body = await res.text();
-    } catch {
-      continue; // network blip — try the next shape
+  // 1) Keyed JSON API first, *if* a key is set and the API is actually serving
+  //    real JSON again (cleaner/structured). Skipped entirely when no key.
+  if (KEY) {
+    for (const build of ENDPOINTS) {
+      try {
+        const res = await fetch(build(serial), { headers: { 'USPTO-API-KEY': KEY, Accept: 'application/json' } });
+        const body = await res.text();
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('json') && !looksLikeGatewayStub(body)) {
+          try { return { mark: normalize(serial, JSON.parse(body)) }; } catch { /* fall through to scrape */ }
+        }
+      } catch { /* try next / fall through to scrape */ }
     }
-    lastCode = res.status;
-    const ct = res.headers.get('content-type') || '';
-    // Real JSON payload → parse it.
-    if (res.ok && ct.includes('json') && !looksLikeGatewayStub(body)) {
-      try { return { mark: normalize(serial, JSON.parse(body)) }; } catch { /* fall through */ }
+  }
+
+  // 2) Public status page (no key needed) — the reliable source today.
+  try {
+    const res = await fetch(STATUSVIEW(serial), { headers: { 'User-Agent': UA, Accept: 'text/html' } });
+    if (res.ok) {
+      const mark = parseStatusView(serial, await res.text());
+      if (mark.markText || mark.status) return { mark };
+    } else if (res.status === 404) {
+      return { mark: { serialNumber: serial, status: 'Not found', markText: '' } };
     }
-    // Gateway/backend stub (TSDR offline or key not entitled to TSDR).
-    if (looksLikeGatewayStub(body) || res.status === 403) { sawGatewayStub = true; continue; }
-    // A clean 404 that is NOT a gateway stub == this serial really isn't in TSDR.
-    if (res.status === 404) return { mark: { serialNumber: serial, status: 'Not found', markText: '' } };
-  }
-  if (sawGatewayStub) {
-    return {
-      unavailable: true,
-      mark: { serialNumber: serial, status: 'TSDR temporarily unavailable', markText: '', _note: 'USPTO TSDR API returned a gateway stub — either the API is down (June 2026 migration) or this key is not subscribed to the TSDR product at account.uspto.gov/api-manager.' },
-    };
-  }
-  return { mark: { serialNumber: serial, status: `TSDR error ${lastCode || 'unknown'}`, markText: '' } };
+  } catch { /* fall through */ }
+
+  return {
+    unavailable: true,
+    mark: { serialNumber: serial, status: 'TSDR temporarily unavailable', markText: '', _note: 'Both the TSDR status page and keyed API were unreachable. Will retry automatically.' },
+  };
 }
 
 // Synthetic, non-USPTO statuses we write ourselves — never treat transitions
@@ -194,13 +232,8 @@ async function main() {
     return;
   }
 
-  if (!KEY) {
-    await write({ info: 'Trademark monitoring is configured, but no TSDR API key is available yet.', marks: serials.map((s) => ({ serialNumber: s, status: 'awaiting setup', markText: '' })), changes: [] });
-    await writeChangesMd([]);
-    console.log('No TSDR_API_KEY; wrote placeholder status for', serials.length, 'serial(s).');
-    return;
-  }
-
+  // No key needed: the public status page is the primary source. A key only
+  // enables the keyed JSON API fallback when USPTO restores it.
   const marks = [];
   let unavailable = 0;
   for (const s of serials) {
