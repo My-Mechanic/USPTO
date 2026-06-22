@@ -49,19 +49,30 @@ location so namesakes are easy to distinguish.
 
 ---
 
-## How trademark monitoring works (one-time setup)
+## How trademark monitoring works
 
-1. **Get a free TSDR API key:** https://account.uspto.gov/profile/api-manager
-2. **Add it as a repo secret:** GitHub → repo **Settings → Secrets and variables →
-   Actions → New repository secret** → name `TSDR_API_KEY`, paste the key.
-3. **Add serials:** on the **My Trademarks** tab, type each serial number → **Add
-   serial** → **Download watchlist.json** → commit it to
-   `data/trademark-watchlist.json` (via GitHub's web editor, or send it to me).
-4. The **Monitor trademarks** Action runs on that commit, then **daily**, and on
-   demand (Actions tab → *Run workflow*). It fetches status and redeploys the site.
+**No API key or secret is required.** USPTO decommissioned the keyed TSDR REST API
+in its June 2026 ODP migration, so the monitor reads the public TSDR **status page**
+(`tsdr.uspto.gov/statusview/sn<serial>`) and parses it. (If USPTO restores the keyed
+JSON API, set `TSDR_API_KEY` and it's used automatically as the cleaner source.)
 
-> The patent watchlist needs no setup — add a number and click **Check for updates**
-> anytime.
+**Instant lookups (in the browser).** On the **My Trademarks** tab, type a serial and
+click **Add & fetch** — status appears immediately, no waiting for a sync. Because
+USPTO's site sends no CORS header, the browser fetches through a proxy:
+
+- *Recommended:* deploy the free **Cloudflare Worker** in `workers/tsdr-proxy.js`
+  (≈3 min, instructions in the file) and paste its URL into **Live-fetch proxy** on
+  the trademark tab. Fast and reliable.
+- *Out of the box:* leave it blank and the app uses best-effort public CORS proxies.
+
+**Daily monitoring + alerts (optional).** To get change notifications and keep status
+fresh server-side: **Download watchlist.json** and commit it to
+`data/trademark-watchlist.json`. The **Monitor trademarks** Action then runs on that
+commit, **daily**, and on demand — it re-fetches status, opens an issue (emails you)
+on any change, and redeploys.
+
+> The patent watchlist also needs no setup — add a number and click **Check for
+> updates** anytime.
 
 ---
 

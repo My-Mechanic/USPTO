@@ -1,7 +1,7 @@
 import { fetchPatent, searchApplications, buildPatentQuery, patentSnapshot } from './api.js';
 import { saveRecords, getRecords, deleteRecord, clearAll, settings } from './db.js';
 import { syncPrivate, bridgeAvailableHere } from './sync.js';
-import { loadTrademarkStatus, tmWatch } from './trademarks.js';
+import { loadTrademarkStatus, tmWatch, tmLive, tmProxy, fetchTrademarkLive } from './trademarks.js';
 import { renderWatchlist, renderResults, renderTrademarks, setStatus, patentsToCSV, trademarksToCSV, openModal, renderPatentDetail, renderTrademarkDetail } from './ui.js';
 import { renderDashboard } from './dashboard.js';
 import { allDeadlines } from './deadlines.js';
@@ -284,7 +284,7 @@ function openPatentDetail(p) {
 }
 
 function openTrademarkDetail(t) {
-  const fresh = state.marks.find((m) => m.serialNumber === t.serialNumber) || t;
+  const fresh = tmMarks().find((m) => m.serialNumber === t.serialNumber) || t;
   openModal(renderTrademarkDetail(fresh));
 }
 
@@ -327,8 +327,56 @@ function wireTrademarks() {
   $('tmAddBtn').onclick = onTmAdd;
   $('tmSerial').addEventListener('keydown', (e) => { if (e.key === 'Enter') onTmAdd(); });
   $('tmDownload').onclick = onTmDownload;
-  $('tmRefresh').onclick = refreshTrademarks;
+  $('tmRefresh').onclick = onTmRefreshAll;
   $('tmFilter').oninput = () => renderTM();
+  const proxyInput = $('tmProxy');
+  if (proxyInput) {
+    proxyInput.value = tmProxy.get();
+    proxyInput.onchange = () => { tmProxy.set(proxyInput.value); setStatus(proxyInput.value ? 'Live-fetch proxy saved.' : 'Live-fetch proxy cleared.', 'ok'); };
+  }
+}
+
+// Add a serial AND fetch its details immediately (no waiting for the next sync).
+async function onTmAdd() {
+  const serial = $('tmSerial').value.replace(/[^0-9]/g, '');
+  if (!serial) return setStatus('Enter a trademark serial number (digits).', 'error');
+  tmWatch.add(serial);
+  $('tmSerial').value = '';
+  renderTM();
+  setStatus(`Fetching trademark ${serial}…`);
+  try {
+    const mark = await fetchTrademarkLive(serial);
+    tmLive.set(mark);
+    renderTM();
+    refreshDashboard();
+    setStatus(`Added “${mark.markText || serial}” — ${mark.status || 'status retrieved'}.`, 'ok');
+    fire({ title: `Tracking ${mark.markText || serial}`, body: mark.status || 'Trademark added.', tag: `tm-add-${serial}`, kind: 'info', refId: serial, url: mark.link });
+  } catch (e) {
+    setStatus(`Added ${serial} to your watchlist. ${e.message}`, 'error');
+  }
+}
+
+// Effective trademark list: live-fetched marks, with published (Action) marks
+// overriding when present. Used by the list, dashboard, deadlines, and exports.
+function tmMarks() {
+  const bySerial = new Map();
+  for (const m of Object.values(tmLive.all())) bySerial.set(m.serialNumber, m);
+  for (const m of state.marks) bySerial.set(m.serialNumber, m);
+  return [...bySerial.values()];
+}
+
+// Re-fetch live status for every watchlisted serial, then reconcile with the
+// published file.
+async function onTmRefreshAll() {
+  const serials = tmWatch.list();
+  if (serials.length) {
+    setStatus(`Refreshing ${serials.length} trademark(s)…`);
+    for (const s of serials) {
+      try { tmLive.set(await fetchTrademarkLive(s)); } catch { /* keep going */ }
+    }
+  }
+  await refreshTrademarks();
+  setStatus('Trademarks refreshed.', 'ok');
 }
 
 async function refreshTrademarks() {
@@ -359,15 +407,6 @@ async function refreshTrademarks() {
   refreshDashboard();
 }
 
-function onTmAdd() {
-  const serial = $('tmSerial').value.replace(/[^0-9]/g, '');
-  if (!serial) return setStatus('Enter a trademark serial number (digits).', 'error');
-  tmWatch.add(serial);
-  $('tmSerial').value = '';
-  setStatus(`Added serial ${serial} to your watchlist. Click “Download watchlist.json” and commit it to start monitoring.`, 'ok');
-  renderTM();
-}
-
 function onTmDownload() {
   download('trademark-watchlist.json', tmWatch.list());
   setStatus('Commit this file to data/trademark-watchlist.json in your repo (or send it to me).', 'ok');
@@ -375,9 +414,9 @@ function onTmDownload() {
 
 function renderTM() {
   const filter = $('tmFilter').value.toLowerCase();
-  const bySerial = new Map(state.marks.map((m) => [m.serialNumber, m]));
-  const rows = tmWatch.list().map((s) => bySerial.get(s) || { serialNumber: s, markText: '(pending)', pending: true, link: `https://tsdr.uspto.gov/#caseNumber=${s}&caseType=SERIAL_NO&searchType=statusSearch` });
-  for (const m of state.marks) if (!tmWatch.list().includes(m.serialNumber)) rows.push(m);
+  const bySerial = new Map(tmMarks().map((m) => [m.serialNumber, m]));
+  const rows = tmWatch.list().map((s) => bySerial.get(s) || { serialNumber: s, markText: '(fetching…)', pending: true, link: `https://tsdr.uspto.gov/#caseNumber=${s}&caseType=SERIAL_NO&searchType=statusSearch` });
+  for (const [serial, m] of bySerial) if (!tmWatch.list().includes(serial)) rows.push(m);
   const view = rows.filter((t) => !filter || `${t.markText} ${t.serialNumber} ${t.status} ${t.owner}`.toLowerCase().includes(filter));
   renderTrademarks($('tmList'), view, {
     onRemove: (t) => { tmWatch.remove(t.serialNumber); renderTM(); setStatus(`Removed ${t.serialNumber} locally. Re-download & commit the watchlist to stop monitoring it.`, 'ok'); },
@@ -416,13 +455,13 @@ function wireDashboard() {
   $('deadlineDays').onchange = (e) => { notifyPrefs.set({ deadlineDays: clampNum(e.target.value, 7, 365, 120) }); };
 
   $('exportIcs').onclick = () => {
-    const dl = allDeadlines(state.patents, state.marks);
+    const dl = allDeadlines(state.patents, tmMarks());
     if (!dl.length) return setStatus('No deadlines to export yet (need granted patents or registered trademarks).', 'error');
     downloadICS(dl);
     setStatus(`Exported ${dl.length} deadline(s) to uspto-deadlines.ics — import it into your calendar.`, 'ok');
   };
   $('exportPatentsCsv').onclick = () => { downloadText('my-patents.csv', patentsToCSV(state.patents), 'text/csv'); setStatus('Patents exported to CSV.', 'ok'); };
-  $('exportTmCsv').onclick = () => { downloadText('my-trademarks.csv', trademarksToCSV(state.marks), 'text/csv'); setStatus('Trademarks exported to CSV.', 'ok'); };
+  $('exportTmCsv').onclick = () => { downloadText('my-trademarks.csv', trademarksToCSV(tmMarks()), 'text/csv'); setStatus('Trademarks exported to CSV.', 'ok'); };
   $('exportPatentWatch').onclick = () => {
     const list = state.patents.map((p) => p.applicationNumberText).filter(Boolean);
     if (!list.length) return setStatus('Add patents first, then export the watchlist.', 'error');
@@ -441,8 +480,9 @@ function updatePermLabel() {
 }
 
 function refreshDashboard() {
-  const deadlines = allDeadlines(state.patents, state.marks);
-  renderDashboard($('dashboard'), { patents: state.patents, marks: state.marks, deadlines, activity: getActivity() });
+  const marks = tmMarks();
+  const deadlines = allDeadlines(state.patents, marks);
+  renderDashboard($('dashboard'), { patents: state.patents, marks, deadlines, activity: getActivity() });
 }
 
 function scheduleAutoCheck() {
@@ -485,7 +525,7 @@ function notifyDueDeadlines() {
   let seen = {};
   try { seen = JSON.parse(localStorage.getItem(seenKey) || '{}'); } catch {}
   const todayStr = today.toISOString().slice(0, 10);
-  const dls = allDeadlines(state.patents, state.marks, today);
+  const dls = allDeadlines(state.patents, tmMarks(), today);
   for (const d of dls) {
     if (!['due-soon', 'grace', 'lapsed'].includes(d.urgency.state)) continue;
     if (d.urgency.daysToDue != null && d.urgency.daysToDue > warnDays) continue;

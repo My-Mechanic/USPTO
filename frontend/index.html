@@ -132,16 +132,27 @@
       <section class="panel">
         <h3 class="panel-h">Track a trademark</h3>
         <p class="hint">
-          Add your serial numbers, then <strong>Download watchlist.json</strong> and commit it to
-          <code>data/trademark-watchlist.json</code>. A daily GitHub Action calls the official USPTO
-          TSDR API and updates status automatically — no server needed.
+          Enter a serial number and its status is fetched <strong>instantly</strong>. To keep it
+          monitored daily (and get change alerts), also <strong>Download watchlist.json</strong> and
+          commit it to <code>data/trademark-watchlist.json</code>.
         </p>
         <div class="row wrap">
           <input id="tmSerial" class="grow" placeholder="Trademark serial number, e.g. 88000000" />
-          <button id="tmAddBtn" class="btn primary">Add serial</button>
+          <button id="tmAddBtn" class="btn primary">Add &amp; fetch</button>
           <button id="tmDownload" class="btn">Download watchlist.json</button>
           <button id="tmRefresh" class="btn">Refresh status</button>
         </div>
+        <details>
+          <summary>Instant lookups: set a live-fetch proxy (recommended)</summary>
+          <p class="hint">
+            USPTO’s site blocks direct browser access (no CORS), so instant lookups go through a proxy.
+            For fast, reliable results, deploy the free Cloudflare Worker in <code>workers/tsdr-proxy.js</code>
+            and paste its URL below. Leave blank to use best-effort public proxies.
+          </p>
+          <label class="field grow"><span>Live-fetch proxy URL (optional)</span>
+            <input id="tmProxy" placeholder="https://tsdr.your-name.workers.dev" autocomplete="off" />
+          </label>
+        </details>
         <div id="tmGenerated" class="muted small"></div>
       </section>
 
