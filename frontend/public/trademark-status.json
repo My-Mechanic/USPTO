@@ -1,16 +1,24 @@
 {
-  "generatedAt": "2026-06-22T13:58:58.202Z",
+  "generatedAt": "2026-06-22T14:01:52.280Z",
   "marks": [
     {
       "serialNumber": "87544318",
       "markText": "A1 SHADES",
       "owner": "Patel, Rohan V.",
-      "status": "A Section 8 declaration has been accepted.",
+      "status": "LIVE/REGISTRATION/Issued and Active",
       "statusDate": "2024-10-02",
       "filingDate": "2017-07-26",
       "registrationNumber": "5462622",
       "registrationDate": "2018-05-08"
     }
   ],
-  "changes": []
+  "changes": [
+    {
+      "serialNumber": "87544318",
+      "markText": "A1 SHADES",
+      "field": "status",
+      "from": "A Section 8 declaration has been accepted.",
+      "to": "LIVE/REGISTRATION/Issued and Active"
+    }
+  ]
 }
