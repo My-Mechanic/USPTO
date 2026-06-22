@@ -2,7 +2,7 @@ import { fetchPatent, searchApplications, buildPatentQuery, patentSnapshot } fro
 import { saveRecords, getRecords, deleteRecord, clearAll, settings } from './db.js';
 import { syncPrivate, bridgeAvailableHere } from './sync.js';
 import { loadTrademarkStatus, tmWatch } from './trademarks.js';
-import { renderWatchlist, renderResults, renderTrademarks, setStatus, patentsToCSV, trademarksToCSV } from './ui.js';
+import { renderWatchlist, renderResults, renderTrademarks, setStatus, patentsToCSV, trademarksToCSV, openModal, renderPatentDetail, renderTrademarkDetail } from './ui.js';
 import { renderDashboard } from './dashboard.js';
 import { allDeadlines } from './deadlines.js';
 import { downloadICS } from './ics.js';
@@ -17,6 +17,7 @@ const state = {
   tmGeneratedAt: '',
   pFilter: { text: '', state: '', country: '', sort: 'filingDate-desc' },
   autoTimer: null,
+  lastAutoRefresh: 0,
 };
 const $ = (id) => document.getElementById(id);
 
@@ -37,13 +38,11 @@ async function init() {
   await refreshTrademarks();
   refreshDashboard();
   scheduleAutoCheck();
+  wireAutoRefreshTriggers();
   setStatus('Add your patents and trademarks to start monitoring them.');
 
-  // Run an auto-check shortly after load if enabled (lets the UI paint first).
-  const prefs = notifyPrefs.get();
-  if (prefs.autoCheck && state.patents.length && settings.getApiKey()) {
-    setTimeout(() => onCheckAll({ silent: true }), 1500);
-  }
+  // Auto-refresh on load (lets the UI paint first), then keep current.
+  setTimeout(() => maybeAutoRefresh('load', { force: true }), 1200);
   notifyDueDeadlines();
 }
 
@@ -253,16 +252,40 @@ function refreshPatents() {
   populateFacets();
   const view = patentView();
   renderWatchlist($('watchlist'), view, {
-    onRemove: async (p) => { await deleteRecord(p.applicationNumberText); state.patents = await getRecords(); refreshPatents(); refreshDashboard(); setStatus('Removed.', 'ok'); },
-    onCheck: async (p) => { await recheckOne(p); },
-    onSaveNote: async (p, { note, tags }) => {
-      await saveRecords([{ ...p, note, tags }]);
+    onRemove: removePatent,
+    onCheck: (p) => recheckOne(p),
+    onOpen: openPatentDetail,
+  });
+  $('patCount').textContent = view.length;
+}
+
+async function removePatent(p) {
+  await deleteRecord(p.applicationNumberText);
+  state.patents = await getRecords();
+  refreshPatents();
+  refreshDashboard();
+  setStatus('Removed.', 'ok');
+}
+
+// Open the in-app detail page (full info + maintenance-fee deadlines + timeline).
+function openPatentDetail(p) {
+  const fresh = state.patents.find((x) => x.applicationNumberText === p.applicationNumberText) || p;
+  openModal(renderPatentDetail(fresh, {
+    onCheck: async (q) => { await recheckOne(q); openPatentDetail(q); },
+    onRemove: removePatent,
+    onSaveNote: async (q, { note, tags }) => {
+      await saveRecords([{ ...q, note, tags }]);
       state.patents = await getRecords();
       refreshPatents();
       setStatus('Note saved.', 'ok');
+      openPatentDetail(q); // re-render with saved values
     },
-  });
-  $('patCount').textContent = view.length;
+  }));
+}
+
+function openTrademarkDetail(t) {
+  const fresh = state.marks.find((m) => m.serialNumber === t.serialNumber) || t;
+  openModal(renderTrademarkDetail(fresh));
 }
 
 async function recheckOne(p) {
@@ -356,6 +379,7 @@ function renderTM() {
   const view = rows.filter((t) => !filter || `${t.markText} ${t.serialNumber} ${t.status} ${t.owner}`.toLowerCase().includes(filter));
   renderTrademarks($('tmList'), view, {
     onRemove: (t) => { tmWatch.remove(t.serialNumber); renderTM(); setStatus(`Removed ${t.serialNumber} locally. Re-download & commit the watchlist to stop monitoring it.`, 'ok'); },
+    onOpen: openTrademarkDetail,
   });
   $('tmCount').textContent = view.length;
 }
@@ -424,10 +448,30 @@ function scheduleAutoCheck() {
   const prefs = notifyPrefs.get();
   if (!prefs.autoCheck) return;
   const ms = Math.max(1, prefs.intervalHours) * 3600 * 1000;
-  state.autoTimer = setInterval(() => {
-    if (state.patents.length && settings.getApiKey()) onCheckAll({ silent: true });
-    refreshTrademarks();
-  }, ms);
+  state.autoTimer = setInterval(() => maybeAutoRefresh('interval', { force: true }), ms);
+}
+
+// Re-check when the user returns to the tab/window, so data is current "whenever"
+// they look — throttled so we never hammer the rate-limited ODP API.
+function wireAutoRefreshTriggers() {
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) maybeAutoRefresh('visible'); });
+  window.addEventListener('focus', () => maybeAutoRefresh('focus'));
+  window.addEventListener('online', () => maybeAutoRefresh('online', { force: true }));
+}
+
+const MIN_AUTO_GAP_MS = 5 * 60 * 1000; // don't auto-refresh more than once / 5 min
+
+async function maybeAutoRefresh(reason, { force = false } = {}) {
+  const prefs = notifyPrefs.get();
+  if (!prefs.autoCheck) return;
+  const now = Date.now();
+  if (!force && state.lastAutoRefresh && now - state.lastAutoRefresh < MIN_AUTO_GAP_MS) return;
+  state.lastAutoRefresh = now;
+  // Trademarks: cheap same-origin fetch of the published status — always safe.
+  await refreshTrademarks();
+  // Patents: live ODP calls — only when we have something to check and a key.
+  if (state.patents.length && settings.getApiKey()) await onCheckAll({ silent: true });
+  notifyDueDeadlines();
 }
 
 // Toast (and log) deadlines entering the warning window, at most once per day each.

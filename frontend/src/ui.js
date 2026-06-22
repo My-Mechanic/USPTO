@@ -10,21 +10,31 @@ export function setStatus(msg, kind = '') {
 }
 
 /* ---------- patent watchlist ---------- */
-export function renderWatchlist(container, patents, { onRemove, onCheck, onSaveNote }) {
+export function renderWatchlist(container, patents, handlers) {
   container.replaceChildren();
   if (!patents.length) {
     return container.appendChild(note('No patents tracked yet. Add one by number above, or use “Find your patent”.'));
   }
-  for (const p of patents) container.appendChild(watchCard(p, { onRemove, onCheck, onSaveNote }));
+  for (const p of patents) container.appendChild(watchCard(p, handlers));
 }
 
-function watchCard(p, { onRemove, onCheck, onSaveNote }) {
+function watchCard(p, { onRemove, onCheck, onOpen }) {
   const el = document.createElement('div');
-  el.className = 'card' + (p.changed ? ' changed' : '');
+  el.className = 'card clickable' + (p.changed ? ' changed' : '');
+  // Whole card opens the detail view; inner buttons stop propagation.
+  if (onOpen) {
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    el.onclick = () => onOpen(p);
+    el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(p); } };
+  }
 
   const head = document.createElement('div');
   head.className = 'card-head';
-  head.appendChild(titleRow(p.inventionTitle || '(untitled)', p.link));
+  const titleBtn = document.createElement('div');
+  titleBtn.className = 'card-title link-look';
+  titleBtn.textContent = p.inventionTitle || '(untitled)';
+  head.appendChild(titleBtn);
   if (p.changed) head.appendChild(pill('Updated', 'pill-change'));
   el.appendChild(head);
 
@@ -65,42 +75,6 @@ function watchCard(p, { onRemove, onCheck, onSaveNote }) {
     el.appendChild(cn);
   }
 
-  // Prosecution timeline (expandable)
-  if (Array.isArray(p.timeline) && p.timeline.length) {
-    const det = document.createElement('details'); det.className = 'timeline';
-    const sum = document.createElement('summary'); sum.textContent = `Prosecution history (${p.timeline.length})`;
-    det.appendChild(sum);
-    const ul = document.createElement('ul'); ul.className = 'tl-list';
-    for (const e of p.timeline) {
-      const li = document.createElement('li');
-      const d = document.createElement('span'); d.className = 'tl-date'; d.textContent = e.date || '—';
-      const t = document.createElement('span'); t.className = 'tl-desc'; t.textContent = e.description || '';
-      li.append(d, t); ul.appendChild(li);
-    }
-    det.appendChild(ul);
-    el.appendChild(det);
-  }
-
-  // Notes + tags editor (expandable)
-  if (onSaveNote) {
-    const det = document.createElement('details'); det.className = 'notes';
-    const sum = document.createElement('summary');
-    sum.textContent = p.note ? '📝 Note & tags' : 'Add note / tags';
-    det.appendChild(sum);
-    const ta = document.createElement('textarea'); ta.className = 'note-input'; ta.rows = 3;
-    ta.placeholder = 'Private note (stays in this browser)…'; ta.value = p.note || '';
-    const ti = document.createElement('input'); ti.className = 'tag-input';
-    ti.placeholder = 'tags, comma, separated'; ti.value = (p.tags || []).join(', ');
-    const save = linkBtn('Save', () => {
-      const tags = ti.value.split(',').map((s) => s.trim()).filter(Boolean);
-      onSaveNote(p, { note: ta.value.trim(), tags });
-    }, 'accent');
-    const wrap = document.createElement('div'); wrap.className = 'note-foot';
-    wrap.append(save);
-    det.append(ta, ti, wrap);
-    el.appendChild(det);
-  }
-
   const foot = document.createElement('div');
   foot.className = 'card-foot';
   const chk = document.createElement('span');
@@ -108,10 +82,206 @@ function watchCard(p, { onRemove, onCheck, onSaveNote }) {
   chk.textContent = p.lastChecked ? `Checked ${fmt(p.lastChecked)}` : 'Not checked yet';
   foot.appendChild(chk);
   const right = document.createElement('span');
-  right.append(linkBtn('Re-check', () => onCheck(p)), linkBtn('Remove', () => onRemove(p), 'danger'));
+  const details = onOpen ? linkBtn('Details ↗', () => onOpen(p), 'accent') : null;
+  const rc = linkBtn('Re-check', () => onCheck(p));
+  const rm = linkBtn('Remove', () => onRemove(p), 'danger');
+  for (const b of [details, rc, rm]) if (b) { stop(b); right.appendChild(b); }
   foot.appendChild(right);
   el.appendChild(foot);
   return el;
+}
+
+// Stop a button's click from bubbling to the card's open handler.
+function stop(btn) {
+  const orig = btn.onclick;
+  btn.onclick = (e) => { e.stopPropagation(); if (orig) orig(e); };
+}
+
+/* ---------- detail view (modal) ---------- */
+export function openModal(contentNode) {
+  const modal = document.getElementById('modal');
+  if (!modal) return;
+  const card = modal.querySelector('.modal-card');
+  card.replaceChildren(contentNode);
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  // Wire dismissal once.
+  if (!modal.dataset.wired) {
+    modal.dataset.wired = '1';
+    modal.querySelector('.modal-backdrop').onclick = closeModal;
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+  }
+  card.scrollTop = 0;
+}
+export function closeModal() {
+  const modal = document.getElementById('modal');
+  if (!modal) return;
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+export function renderPatentDetail(p, { onSaveNote, onCheck, onRemove }) {
+  const root = document.createElement('div');
+  root.appendChild(detailHeader(p.inventionTitle || '(untitled)', p.link, p.link ? 'Open in Google Patents ↗' : '', p.changed));
+
+  root.appendChild(detailSection('Identifiers', [
+    ['Application #', p.applicationNumberText],
+    ['Patent #', p.patentNumber],
+    ['Publication #', p.publicationNumber],
+    ['Type', p.type],
+    ['Source', p.source === 'private' ? 'Private / pending (local)' : 'Public (ODP)'],
+  ]));
+  root.appendChild(detailSection('Status & dates', [
+    ['Status', p.status],
+    ['Status date', p.statusDate],
+    ['Filing date', p.filingDate],
+    ['Grant date', p.grantDate],
+    ['Latest event', p.latestEvent ? `${p.latestEvent}${p.latestEventDate ? ' (' + p.latestEventDate + ')' : ''}` : ''],
+  ]));
+  const loc = [p.inventorCity, p.inventorState, p.inventorCountry].filter(Boolean).join(', ');
+  root.appendChild(detailSection('People', [
+    ['Assignee / applicant', p.assignee],
+    ['Inventors', p.inventors],
+    ['Inventor location', loc],
+  ]));
+
+  // Deadlines (full list, all states)
+  const dls = patentDeadlines(p).map((d) => ({ ...d, urgency: classify(d) }));
+  if (dls.length) root.appendChild(deadlineBlock('Maintenance fees', dls));
+
+  // Notes + tags (always-visible editor)
+  if (onSaveNote) root.appendChild(notesEditor(p, onSaveNote));
+
+  // Full prosecution timeline
+  root.appendChild(timelineBlock(p.timeline));
+
+  // Footer actions
+  const foot = document.createElement('div');
+  foot.className = 'modal-foot';
+  const chk = document.createElement('span'); chk.className = 'muted small';
+  chk.textContent = p.lastChecked ? `Last checked ${fmt(p.lastChecked)}` : 'Not checked yet';
+  foot.appendChild(chk);
+  const right = document.createElement('span');
+  if (onCheck) right.appendChild(btn('Re-check now', () => onCheck(p)));
+  if (onRemove) right.appendChild(btn('Remove', () => { onRemove(p); closeModal(); }, 'danger'));
+  right.appendChild(btn('Close', closeModal));
+  foot.appendChild(right);
+  root.appendChild(foot);
+  return root;
+}
+
+export function renderTrademarkDetail(t) {
+  const root = document.createElement('div');
+  root.appendChild(detailHeader(t.markText || '(no word mark)', t.link, 'Open in TSDR ↗', false));
+  root.appendChild(detailSection('Identifiers', [
+    ['Serial #', t.serialNumber],
+    ['Registration #', t.registrationNumber],
+  ]));
+  root.appendChild(detailSection('Status & dates', [
+    ['Status', t.status || (t.pending ? 'awaiting first check' : '')],
+    ['Status date', t.statusDate],
+    ['Filing date', t.filingDate],
+    ['Registration date', t.registrationDate],
+    ['Owner', t.owner],
+  ]));
+  const dls = trademarkDeadlines(t).map((d) => ({ ...d, urgency: classify(d) }));
+  if (dls.length) root.appendChild(deadlineBlock('Post-registration deadlines', dls));
+  else root.appendChild(note('Post-registration deadlines (§8 / §9 / §15) appear once the mark is registered.'));
+
+  const foot = document.createElement('div');
+  foot.className = 'modal-foot';
+  foot.appendChild(document.createElement('span'));
+  foot.appendChild(btn('Close', closeModal));
+  root.appendChild(foot);
+  return root;
+}
+
+function detailHeader(title, link, linkLabel, changed) {
+  const head = document.createElement('div');
+  head.className = 'modal-head';
+  const left = document.createElement('div');
+  const h = document.createElement('h2'); h.className = 'modal-title'; h.textContent = title;
+  left.appendChild(h);
+  if (changed) left.appendChild(pill('Recently updated', 'pill-change'));
+  if (link && linkLabel) {
+    const a = document.createElement('a'); a.className = 'modal-extlink';
+    a.href = link; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = linkLabel;
+    left.appendChild(a);
+  }
+  head.appendChild(left);
+  const x = document.createElement('button'); x.className = 'modal-x'; x.setAttribute('aria-label', 'Close'); x.textContent = '✕';
+  x.onclick = closeModal;
+  head.appendChild(x);
+  return head;
+}
+
+function detailSection(heading, pairs) {
+  const sec = document.createElement('div'); sec.className = 'detail-sec';
+  sec.appendChild(elText('h4', 'detail-h', heading));
+  const grid = document.createElement('div'); grid.className = 'detail-grid';
+  for (const [k, v] of pairs) {
+    if (!v) continue;
+    const row = document.createElement('div'); row.className = 'detail-kv';
+    row.appendChild(elText('span', 'detail-k', k));
+    row.appendChild(elText('span', 'detail-v', String(v)));
+    grid.appendChild(row);
+  }
+  if (!grid.childNodes.length) grid.appendChild(elText('span', 'muted small', '—'));
+  sec.appendChild(grid);
+  return sec;
+}
+
+function deadlineBlock(heading, dls) {
+  const sec = document.createElement('div'); sec.className = 'detail-sec';
+  sec.appendChild(elText('h4', 'detail-h', heading));
+  const list = document.createElement('div'); list.className = 'list';
+  for (const d of dls) {
+    const row = document.createElement('div'); row.className = 'dl-row';
+    const top = document.createElement('div'); top.className = 'dl-row-top';
+    top.appendChild(elText('span', 'dl-label', d.label));
+    top.appendChild(pill(d.urgency.badge, d.urgency.cls));
+    row.appendChild(top);
+    row.appendChild(elText('div', 'muted small', `Window ${d.windowOpen || '?'} → due ${d.dueDate}${d.graceEnd ? ` (grace to ${d.graceEnd})` : ''}`));
+    if (d.detail) row.appendChild(elText('div', 'muted small', d.detail));
+    list.appendChild(row);
+  }
+  sec.appendChild(list);
+  return sec;
+}
+
+function notesEditor(p, onSaveNote) {
+  const sec = document.createElement('div'); sec.className = 'detail-sec';
+  sec.appendChild(elText('h4', 'detail-h', 'Notes & tags (private to this browser)'));
+  const ta = document.createElement('textarea'); ta.className = 'note-input'; ta.rows = 3;
+  ta.placeholder = 'Add a private note…'; ta.value = p.note || '';
+  const ti = document.createElement('input'); ti.className = 'tag-input';
+  ti.placeholder = 'tags, comma, separated'; ti.value = (p.tags || []).join(', ');
+  const wrap = document.createElement('div'); wrap.className = 'note-foot';
+  wrap.appendChild(btn('Save note', () => {
+    const tags = ti.value.split(',').map((s) => s.trim()).filter(Boolean);
+    onSaveNote(p, { note: ta.value.trim(), tags });
+  }, 'primary'));
+  sec.append(ta, ti, wrap);
+  return sec;
+}
+
+function timelineBlock(timeline) {
+  const sec = document.createElement('div'); sec.className = 'detail-sec';
+  const items = Array.isArray(timeline) ? timeline : [];
+  sec.appendChild(elText('h4', 'detail-h', `Prosecution history${items.length ? ` (${items.length})` : ''}`));
+  if (!items.length) {
+    sec.appendChild(elText('p', 'muted small', 'No recorded events. Re-check to pull the latest prosecution history.'));
+    return sec;
+  }
+  const ul = document.createElement('ul'); ul.className = 'tl-list full';
+  for (const e of items) {
+    const li = document.createElement('li');
+    li.appendChild(elText('span', 'tl-date', e.date || '—'));
+    li.appendChild(elText('span', 'tl-desc', e.description || ''));
+    ul.appendChild(li);
+  }
+  sec.appendChild(ul);
+  return sec;
 }
 
 /* ---------- search results (find-to-add) ---------- */
@@ -148,15 +318,23 @@ export function renderResults(container, patents, { onAdd, tracked }) {
 }
 
 /* ---------- trademarks ---------- */
-export function renderTrademarks(container, marks, { onRemove }) {
+export function renderTrademarks(container, marks, { onRemove, onOpen }) {
   container.replaceChildren();
   if (!marks.length) {
     return container.appendChild(note('No trademarks yet. Add a serial number above, commit the watchlist, and the daily Action will fill in status.'));
   }
   for (const t of marks) {
     const el = document.createElement('div');
-    el.className = 'card';
-    el.appendChild(titleRow(t.markText || '(no word mark)', t.link));
+    el.className = 'card' + (onOpen ? ' clickable' : '');
+    if (onOpen) {
+      el.tabIndex = 0; el.setAttribute('role', 'button');
+      el.onclick = () => onOpen(t);
+      el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(t); } };
+    }
+    const titleEl = document.createElement('div');
+    titleEl.className = 'card-title' + (onOpen ? ' link-look' : '');
+    titleEl.textContent = t.markText || '(no word mark)';
+    el.appendChild(titleEl);
     const meta = document.createElement('div');
     meta.className = 'card-meta';
     meta.append(field('Serial #', t.serialNumber), field('Status', t.status || (t.pending ? 'awaiting first check' : '—')), field('Filed', t.filingDate));
@@ -177,7 +355,10 @@ export function renderTrademarks(container, marks, { onRemove }) {
     }
     const foot = document.createElement('div'); foot.className = 'card-foot';
     foot.appendChild(document.createElement('span'));
-    foot.appendChild(linkBtn('Remove', () => onRemove(t), 'danger'));
+    const right = document.createElement('span');
+    if (onOpen) { const d = linkBtn('Details ↗', () => onOpen(t), 'accent'); stop(d); right.appendChild(d); }
+    const rm = linkBtn('Remove', () => onRemove(t), 'danger'); stop(rm); right.appendChild(rm);
+    foot.appendChild(right);
     el.appendChild(foot);
     container.appendChild(el);
   }
@@ -212,6 +393,12 @@ function pill(text, cls) {
 }
 function linkBtn(text, onClick, cls = '') {
   const b = document.createElement('button'); b.className = 'linkbtn ' + cls; b.textContent = text; b.onclick = onClick; return b;
+}
+function btn(text, onClick, cls = '') {
+  const b = document.createElement('button'); b.className = 'btn small ' + cls; b.textContent = text; b.onclick = onClick; return b;
+}
+function elText(tag, cls, text) {
+  const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n;
 }
 function note(text) {
   const p = document.createElement('p'); p.className = 'empty'; p.textContent = text; return p;
