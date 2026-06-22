@@ -12,7 +12,13 @@ const STATUS_URL = `${import.meta.env.BASE_URL}trademark-status.json`;
 // data/trademark-watchlist.json so the Action picks them up).
 export const tmWatch = {
   list() {
-    try { return JSON.parse(localStorage.getItem('tm_watch') || '[]'); } catch { return []; }
+    let raw;
+    try { raw = JSON.parse(localStorage.getItem('tm_watch') || '[]'); } catch { return []; }
+    if (!Array.isArray(raw)) return [];
+    // Normalize to digits + drop duplicates; persist the cleaned list if it changed.
+    const unique = [...new Set(raw.map((s) => String(s).replace(/[^0-9]/g, '')).filter(Boolean))];
+    if (unique.length !== raw.length) localStorage.setItem('tm_watch', JSON.stringify(unique));
+    return unique;
   },
   add(serial) {
     const s = String(serial).replace(/[^0-9]/g, '');

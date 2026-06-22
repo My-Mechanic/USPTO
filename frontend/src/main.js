@@ -1,5 +1,5 @@
 import { fetchPatent, searchApplications, buildPatentQuery, patentSnapshot } from './api.js';
-import { saveRecords, getRecords, deleteRecord, clearAll, settings } from './db.js';
+import { saveRecords, getRecords, deleteRecord, clearAll, settings, dedupePatents } from './db.js';
 import { syncPrivate, bridgeAvailableHere } from './sync.js';
 import { consumePrivateImport, parsePrivatePayload, bookmarkletSource, appUrl } from './private.js';
 import { loadTrademarkStatus, tmWatch, tmLive, tmProxy, fetchTrademarkLive } from './trademarks.js';
@@ -27,6 +27,7 @@ async function init() {
   if (presetKey && presetKey !== settings.getApiKey()) settings.setApiKey(presetKey);
   $('apiKey').value = presetKey;
 
+  await dedupePatents();
   state.patents = await getRecords();
   wireTabs();
   wirePatents();
@@ -99,8 +100,9 @@ async function onAddByNumber() {
   try {
     const p = await fetchPatent({ apiKey, number, type });
     await addPatent(p);
+    const removed = await reconcilePatents();
     $('addNum').value = '';
-    setStatus(`Added “${p.inventionTitle || p.applicationNumberText}” to My Patents.`, 'ok');
+    setStatus(`Added “${p.inventionTitle || p.applicationNumberText}” to My Patents.${removed ? ` Merged ${removed} duplicate(s).` : ''}`, 'ok');
   } catch (e) {
     setStatus(e.message, 'error');
   }
@@ -116,8 +118,12 @@ function carryUserFields(fresh, old) {
   };
 }
 
+const onlyDigits = (s) => String(s == null ? '' : s).replace(/[^0-9]/g, '');
+
 async function addPatent(p) {
-  const existing = state.patents.find((x) => x.applicationNumberText === p.applicationNumberText);
+  // Match on digits so a re-add in a different format updates (not duplicates).
+  const pn = onlyDigits(p.applicationNumberText);
+  const existing = state.patents.find((x) => onlyDigits(x.applicationNumberText) === pn);
   const rec = {
     ...carryUserFields(p, existing),
     lastChecked: new Date().toISOString(),
@@ -129,6 +135,15 @@ async function addPatent(p) {
   state.patents = await getRecords();
   refreshPatents();
   refreshDashboard();
+}
+
+// Actively remove duplicate applications, then refresh. Returns count removed.
+async function reconcilePatents() {
+  const removed = await dedupePatents();
+  state.patents = await getRecords();
+  refreshPatents();
+  refreshDashboard();
+  return removed;
 }
 
 async function onCheckAll({ silent = false } = {}) {
@@ -178,7 +193,8 @@ async function onSyncPrivate() {
   try {
     const patents = await syncPrivate({ onStatus: (m) => setStatus(m) });
     for (const p of patents) await addPatent({ ...p, source: 'private' });
-    setStatus(`Synced ${patents.length} private/pending application(s) into My Patents.`, 'ok');
+    const removed = await reconcilePatents();
+    setStatus(`Synced ${patents.length} private/pending application(s).${removed ? ` Merged ${removed} duplicate(s).` : ''}`, 'ok');
   } catch (e) {
     setStatus(e.message, 'error');
   }
@@ -217,10 +233,11 @@ async function importPrivateFromUrl() {
 
 async function importPrivateRecords(recs) {
   for (const p of recs) await addPatent(p);
+  const removed = await reconcilePatents();
   // Jump to the Patents tab so the user sees them land.
   const patentsTab = document.querySelector('.tab[data-tab="patents"]');
   if (patentsTab) patentsTab.click();
-  setStatus(`Imported ${recs.length} private/pending application(s) from Patent Center.`, 'ok');
+  setStatus(`Imported ${recs.length} private/pending application(s) from Patent Center.${removed ? ` Merged ${removed} duplicate(s).` : ''}`, 'ok');
 }
 
 async function onFind() {
@@ -252,10 +269,8 @@ async function onImport(e) {
     const parsed = JSON.parse(await file.text());
     const items = (Array.isArray(parsed) ? parsed : parsed.patents || []).filter((p) => p && p.applicationNumberText);
     await saveRecords(items);
-    state.patents = await getRecords();
-    refreshPatents();
-    refreshDashboard();
-    setStatus(`Imported ${items.length} patent(s).`, 'ok');
+    const removed = await reconcilePatents();
+    setStatus(`Imported ${items.length} patent(s).${removed ? ` Removed ${removed} duplicate(s).` : ''}`, 'ok');
   } catch (err) {
     setStatus('Import failed: ' + err.message, 'error');
   }
