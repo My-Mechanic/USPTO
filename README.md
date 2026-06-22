@@ -76,12 +76,27 @@ on any change, and redeploys.
 
 ---
 
-## ⚠️ The one architectural constraint (private patents only)
+## Private / pending applications (unpublished)
 
-Private/pending Patent Center data **cannot** be fetched on the live site: it needs
-your interactive MFA sign-in, and we never store credentials. So **Sync private /
-pending** runs only from the **local** app (`npm run dev` + the local bridge). On
-the public site, capture it locally and use **Import JSON**.
+Unpublished applications are confidential — only your authenticated Patent Center
+session can see them, and Patent Center sends no CORS headers and isolates its login,
+so **no website (including this one) can fetch them directly**. Three ways to bring
+them in, none of which expose your credentials to this site:
+
+1. **Bookmarklet (recommended — works on the live site, no install).** On the
+   **My Patents** tab open *"Import my private / pending applications"* and drag the
+   **My Private Patents** button to your bookmarks bar. Sign in to Patent Center, open
+   your **Workbench**, and click the bookmark — it runs inside your own Patent Center
+   tab (using your session), scrapes your application list, and opens this app with the
+   data imported automatically (it also copies JSON to your clipboard as a fallback to
+   paste). Your login never touches this site; only the resulting list does.
+2. **Local bridge.** Run the app locally (`npm run dev` + `backend-automation`); the
+   **Sync private / pending** button opens a real browser for you to sign in via MFA.
+3. **Import JSON.** Capture the list any way you like and use **Import JSON**.
+
+> The bookmarklet's scraper reads whatever your Workbench shows; if Patent Center
+> changes its layout it may need tuning (see `frontend/src/private.js`,
+> `patentCenterExtractor`). The clipboard/paste fallback always works.
 
 ---
 

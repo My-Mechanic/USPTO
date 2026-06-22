@@ -220,6 +220,20 @@ summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .chk { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); white-space: nowrap; }
 .chk input { width: auto; }
 
+/* private/pending bookmarklet */
+.steps { margin: 6px 0 0; padding-left: 20px; font-size: 13px; color: var(--muted); }
+.steps li { margin: 6px 0; }
+.steps strong { color: var(--text); }
+.bookmarklet {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-2); border: 1px solid var(--accent); color: #fff;
+  padding: 6px 12px; border-radius: 8px; text-decoration: none; font-size: 13px;
+  cursor: grab; font-weight: 600;
+}
+.bookmarklet:hover { background: var(--accent); }
+details.sub { margin-top: 10px; }
+details.sub summary { font-size: 12.5px; }
+
 /* clickable cards + link-styled titles */
 .card.clickable { cursor: pointer; transition: border-color .12s, transform .12s; }
 .card.clickable:hover { border-color: var(--accent); }

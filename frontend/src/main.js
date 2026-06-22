@@ -1,6 +1,7 @@
 import { fetchPatent, searchApplications, buildPatentQuery, patentSnapshot } from './api.js';
 import { saveRecords, getRecords, deleteRecord, clearAll, settings } from './db.js';
 import { syncPrivate, bridgeAvailableHere } from './sync.js';
+import { consumePrivateImport, parsePrivatePayload, bookmarkletSource, appUrl } from './private.js';
 import { loadTrademarkStatus, tmWatch, tmLive, tmProxy, fetchTrademarkLive } from './trademarks.js';
 import { renderWatchlist, renderResults, renderTrademarks, setStatus, patentsToCSV, trademarksToCSV, openModal, renderPatentDetail, renderTrademarkDetail } from './ui.js';
 import { renderDashboard } from './dashboard.js';
@@ -29,9 +30,11 @@ async function init() {
   state.patents = await getRecords();
   wireTabs();
   wirePatents();
+  wirePrivate();
   wireTrademarks();
   wireDashboard();
   registerServiceWorker();
+  await importPrivateFromUrl();
   if (!bridgeAvailableHere()) $('syncBtn').title = 'Live private sync works only when running locally.';
 
   refreshPatents();
@@ -179,6 +182,45 @@ async function onSyncPrivate() {
   } catch (e) {
     setStatus(e.message, 'error');
   }
+}
+
+/* ---------------- private / pending (bookmarklet, no local server) ---------------- */
+function wirePrivate() {
+  const link = $('pcBookmarklet');
+  if (link) {
+    link.href = bookmarkletSource(appUrl());
+    // Clicking it here would run on the wrong origin (no Patent Center session) —
+    // it's meant to be dragged to the bookmarks bar and clicked ON Patent Center.
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      setStatus('Drag this button to your bookmarks bar, then click it while signed in to Patent Center.', 'ok');
+    });
+  }
+  const paste = $('pcPasteBtn');
+  if (paste) paste.onclick = async () => {
+    try {
+      const recs = parsePrivatePayload($('pcPaste').value.trim());
+      if (!recs.length) return setStatus('No applications found in the pasted JSON.', 'error');
+      await importPrivateRecords(recs);
+      $('pcPaste').value = '';
+    } catch (e) {
+      setStatus('Could not parse pasted data: ' + e.message, 'error');
+    }
+  };
+}
+
+// On load, import any applications a bookmarklet handed back via the URL fragment.
+async function importPrivateFromUrl() {
+  const recs = consumePrivateImport();
+  if (recs.length) await importPrivateRecords(recs);
+}
+
+async function importPrivateRecords(recs) {
+  for (const p of recs) await addPatent(p);
+  // Jump to the Patents tab so the user sees them land.
+  const patentsTab = document.querySelector('.tab[data-tab="patents"]');
+  if (patentsTab) patentsTab.click();
+  setStatus(`Imported ${recs.length} private/pending application(s) from Patent Center.`, 'ok');
 }
 
 async function onFind() {

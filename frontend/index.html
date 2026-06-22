@@ -83,6 +83,31 @@
           <button id="pClear" class="btn danger">Clear</button>
         </div>
         <details>
+          <summary>Import my private / pending applications (from Patent Center — no install)</summary>
+          <p class="hint">
+            Unpublished applications are confidential, so they can only come from your
+            signed-in Patent Center session — no website can fetch them directly. This
+            bookmarklet runs inside <em>your</em> Patent Center tab and sends the list back here.
+            Your login never touches this site.
+          </p>
+          <ol class="steps">
+            <li>Drag this button to your bookmarks bar: &nbsp;
+              <a id="pcBookmarklet" class="bookmarklet" href="#" draggable="true">📥 My Private Patents</a>
+            </li>
+            <li>Open <a href="https://patentcenter.uspto.gov/" target="_blank" rel="noopener">Patent Center</a>,
+              sign in, and go to your <strong>Workbench</strong> (your applications list).</li>
+            <li>Click the <strong>My Private Patents</strong> bookmark. A tab opens back here with your
+              applications imported automatically.</li>
+          </ol>
+          <details class="sub">
+            <summary>Manual fallback — paste the copied JSON</summary>
+            <p class="hint">The bookmarklet also copies the data to your clipboard. If the auto-open is blocked, paste it here.</p>
+            <textarea id="pcPaste" class="note-input" rows="3" placeholder='[{"applicationNumberText":"18000000", ...}]'></textarea>
+            <div class="note-foot"><button id="pcPasteBtn" class="btn small primary">Import pasted JSON</button></div>
+          </details>
+        </details>
+
+        <details>
           <summary>Find your patent (search to add) — for when you don’t know the number</summary>
           <p class="hint">Common names collide (~9,000 “John Smith” inventors). Combine fields — they’re AND-ed — then click “Add” on yours.</p>
           <div class="grid">
