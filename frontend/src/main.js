@@ -1,7 +1,7 @@
 import { fetchPatent, searchApplications, buildPatentQuery, patentSnapshot } from './api.js';
-import { saveRecords, getRecords, deleteRecord, clearAll, settings, dedupePatents } from './db.js';
+import { saveRecords, getRecords, deleteRecord, clearAll, settings, dedupePatents, canonNumber } from './db.js';
 import { syncPrivate, bridgeAvailableHere } from './sync.js';
-import { consumePrivateImport, parsePrivatePayload, bookmarkletSource, appUrl } from './private.js';
+import { consumePrivateImport, parsePrivatePayload, parsePatentCenterXml, bookmarkletSource, appUrl } from './private.js';
 import { loadTrademarkStatus, tmWatch, tmLive, tmProxy, fetchTrademarkLive } from './trademarks.js';
 import { renderWatchlist, renderResults, renderTrademarks, setStatus, patentsToCSV, trademarksToCSV, openModal, renderPatentDetail, renderTrademarkDetail } from './ui.js';
 import { renderDashboard } from './dashboard.js';
@@ -118,12 +118,11 @@ function carryUserFields(fresh, old) {
   };
 }
 
-const onlyDigits = (s) => String(s == null ? '' : s).replace(/[^0-9]/g, '');
-
 async function addPatent(p) {
-  // Match on digits so a re-add in a different format updates (not duplicates).
-  const pn = onlyDigits(p.applicationNumberText);
-  const existing = state.patents.find((x) => onlyDigits(x.applicationNumberText) === pn);
+  // Match on the canonical number so a re-add in a different format updates
+  // (not duplicates), while PCT/lettered IDs are preserved.
+  const pn = canonNumber(p.applicationNumberText);
+  const existing = state.patents.find((x) => canonNumber(x.applicationNumberText) === pn);
   const rec = {
     ...carryUserFields(p, existing),
     lastChecked: new Date().toISOString(),
@@ -212,6 +211,19 @@ function wirePrivate() {
       setStatus('Drag this button to your bookmarks bar, then click it while signed in to Patent Center.', 'ok');
     });
   }
+  const xml = $('pcXml');
+  if (xml) xml.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setStatus(`Reading ${file.name}…`);
+    try {
+      const recs = parsePatentCenterXml(await file.text());
+      await importPrivateRecords(recs);
+    } catch (err) {
+      setStatus('XML import failed: ' + err.message, 'error');
+    }
+    e.target.value = '';
+  };
   const paste = $('pcPasteBtn');
   if (paste) paste.onclick = async () => {
     try {

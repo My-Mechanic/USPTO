@@ -83,20 +83,19 @@ session can see them, and Patent Center sends no CORS headers and isolates its l
 so **no website (including this one) can fetch them directly**. Three ways to bring
 them in, none of which expose your credentials to this site:
 
-1. **Bookmarklet (recommended — works on the live site, no install).** On the
-   **My Patents** tab open *"Import my private / pending applications"* and drag the
-   **My Private Patents** button to your bookmarks bar. Sign in to Patent Center, open
-   your **Workbench**, and click the bookmark — it runs inside your own Patent Center
-   tab (using your session), scrapes your application list, and opens this app with the
-   data imported automatically (it also copies JSON to your clipboard as a fallback to
-   paste). Your login never touches this site; only the resulting list does.
-2. **Local bridge.** Run the app locally (`npm run dev` + `backend-automation`); the
+1. **Upload a Patent Center XML export (most reliable).** In Patent Center →
+   **Workbench → Applications by Customer Number**, download the XML, then on the
+   **My Patents** tab open *"Import my private / pending applications"* → **Choose XML
+   file**. It's parsed entirely in your browser (handles US, provisional, PCT, and
+   reexam numbers) and the applications land in My Patents.
+2. **Bookmarklet (no download).** Drag the **My Private Patents** button to your
+   bookmarks bar; sign in to Patent Center, open your **Workbench**, and click it — it
+   runs inside your own Patent Center tab (using your session), reads your application
+   list, and opens this app with the data imported (also copied to your clipboard as a
+   paste fallback). Your login never touches this site; only the resulting list does.
+3. **Local bridge.** Run the app locally (`npm run dev` + `backend-automation`); the
    **Sync private / pending** button opens a real browser for you to sign in via MFA.
-3. **Import JSON.** Capture the list any way you like and use **Import JSON**.
-
-> The bookmarklet's scraper reads whatever your Workbench shows; if Patent Center
-> changes its layout it may need tuning (see `frontend/src/private.js`,
-> `patentCenterExtractor`). The clipboard/paste fallback always works.
+4. **Import JSON.** Capture the list any way you like and use **Import JSON**.
 
 ---
 

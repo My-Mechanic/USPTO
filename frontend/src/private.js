@@ -33,7 +33,9 @@ export function parsePrivatePayload(json) {
   return list
     .filter((p) => p && p.applicationNumberText)
     .map((p) => ({
-      applicationNumberText: String(p.applicationNumberText).replace(/[^0-9]/g, ''),
+      // Keep the ID as-is (trimmed) so PCT/lettered numbers survive; the DB layer
+      // canonicalizes for the key.
+      applicationNumberText: String(p.applicationNumberText).trim(),
       inventionTitle: p.inventionTitle || '',
       filingDate: p.filingDate || '',
       status: p.status || '',
@@ -46,6 +48,58 @@ export function parsePrivatePayload(json) {
 
 function atobUtf8(b64) {
   return decodeURIComponent(escape(atob(b64)));
+}
+
+/* ---------- Patent Center "Applications by Customer" XML import ---------- */
+// Patent Center can export your full application list as XML (a <PairCustomerList>
+// of <PairCustomer> entries). This is the most reliable private-data path: download
+// it while signed in, then upload it here — parsed entirely in your browser.
+
+function xmlDecode(s) {
+  return String(s || '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'").replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+}
+const dateOnly = (s) => xmlDecode(s).trim().split('T')[0] || '';
+function tagVal(chunk, tag) {
+  const m = chunk.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'i'));
+  return m ? xmlDecode(m[1]).trim() : '';
+}
+
+// Parse the XML text into normalized private patent records.
+export function parsePatentCenterXml(xml) {
+  if (!/<PairCustomer[>\s]/i.test(xml)) {
+    throw new Error('Not a Patent Center "Applications by Customer" XML export.');
+  }
+  const chunks = xml.split(/<PairCustomer>/i).slice(1);
+  const out = [];
+  for (const raw of chunks) {
+    const chunk = raw.split(/<\/PairCustomer>/i)[0];
+    const applId = tagVal(chunk, 'applId');
+    if (!applId) continue;
+    const docket = tagVal(chunk, 'attyDktNo');
+    const patentNo = tagVal(chunk, 'patentNo');
+    out.push({
+      applicationNumberText: applId,
+      // The export has no invention title; use the attorney docket as a label.
+      inventionTitle: docket || '',
+      docketNumber: docket,
+      filingDate: dateOnly(tagVal(chunk, 'fileDt')),
+      status: tagVal(chunk, 'applicationStatusText'),
+      statusDate: dateOnly(tagVal(chunk, 'statusDate')),
+      patentNumber: /\d/.test(patentNo) ? patentNo.replace(/[^0-9]/g, '') : '',
+      grantDate: dateOnly(tagVal(chunk, 'patentIssueDt')),
+      publicationNumber: tagVal(chunk, 'earliestPublicationNumber'),
+      latestEvent: tagVal(chunk, 'lastTransactionDescription'),
+      latestEventDate: dateOnly(tagVal(chunk, 'LastTransactionDate')),
+      examiner: tagVal(chunk, 'examinerName'),
+      groupArtUnit: tagVal(chunk, 'groupArtUnit'),
+      customerNumber: tagVal(chunk, 'customerNo'),
+      source: 'private',
+    });
+  }
+  if (!out.length) throw new Error('No applications found in the XML.');
+  return out;
 }
 
 // The function literally executed on patentcenter.uspto.gov. It must be fully

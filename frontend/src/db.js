@@ -21,12 +21,20 @@ function openDB() {
   });
 }
 
-const digitsOnly = (s) => String(s == null ? '' : s).replace(/[^0-9]/g, '');
+// Canonical form of an application/patent number for de-duplication.
+// US numbers vary only by punctuation ("17/571,842" == "17571842") → digits.
+// PCT and other lettered IDs ("PCT/US25/23516") must keep their letters/slashes,
+// so we only strip whitespace and uppercase them.
+export const canonNumber = (s) => {
+  const v = String(s == null ? '' : s).trim();
+  if (!v) return '';
+  return /[A-Za-z]/.test(v) ? v.toUpperCase().replace(/\s+/g, '') : v.replace(/[^0-9]/g, '');
+};
 
-// Canonical identity for a patent: digits-only application number, else patent #.
+// Canonical identity for a patent: canonical application number, else patent #.
 // Two records with the same canonical key are the same application.
 export function patentKey(p) {
-  return digitsOnly(p.applicationNumberText) || (p.patentNumber ? 'pat:' + digitsOnly(p.patentNumber) : '');
+  return canonNumber(p.applicationNumberText) || (p.patentNumber ? 'pat:' + canonNumber(p.patentNumber) : '');
 }
 
 export async function saveRecords(records) {
@@ -39,7 +47,7 @@ export async function saveRecords(records) {
     // under different formats (e.g. "18/123,456" vs "18123456").
     for (const r of records) {
       if (!r || !r.applicationNumberText) continue;
-      const canon = digitsOnly(r.applicationNumberText);
+      const canon = canonNumber(r.applicationNumberText);
       os.put(canon && canon !== r.applicationNumberText ? { ...r, applicationNumberText: canon } : r);
     }
     tx.oncomplete = () => resolve();
@@ -62,7 +70,7 @@ function mergePatentGroup(recs) {
     for (const t of r.tags || []) tags.add(t);
     if (r.addedAt && (!addedAt || r.addedAt < addedAt)) addedAt = r.addedAt; // keep earliest
   }
-  out.applicationNumberText = digitsOnly(out.applicationNumberText) || out.applicationNumberText;
+  out.applicationNumberText = canonNumber(out.applicationNumberText) || out.applicationNumberText;
   if (tags.size) out.tags = [...tags];
   if (addedAt) out.addedAt = addedAt;
   return out;
@@ -86,7 +94,7 @@ export async function dedupePatents() {
     for (const recs of groups.values()) {
       if (recs.length === 1) {
         const r = recs[0];
-        const canon = digitsOnly(r.applicationNumberText);
+        const canon = canonNumber(r.applicationNumberText);
         if (canon && canon !== r.applicationNumberText) { os.delete(r.applicationNumberText); os.put({ ...r, applicationNumberText: canon }); }
         continue;
       }

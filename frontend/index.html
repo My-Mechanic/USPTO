@@ -86,10 +86,21 @@
           <summary>Import my private / pending applications (from Patent Center — no install)</summary>
           <p class="hint">
             Unpublished applications are confidential, so they can only come from your
-            signed-in Patent Center session — no website can fetch them directly. This
-            bookmarklet runs inside <em>your</em> Patent Center tab and sends the list back here.
-            Your login never touches this site.
+            signed-in Patent Center session — no website can fetch them directly. Your login
+            never touches this site; only the resulting list does.
           </p>
+
+          <p class="sub-h">Option A — Upload a Patent Center XML export (most reliable)</p>
+          <ol class="steps">
+            <li>In <a href="https://patentcenter.uspto.gov/" target="_blank" rel="noopener">Patent Center</a>,
+              sign in → <strong>Workbench</strong> → <strong>Applications by Customer Number</strong>, and
+              <strong>download the XML</strong>.</li>
+            <li>Upload it here:
+              <label class="btn small file">Choose XML file<input id="pcXml" type="file" accept=".xml,text/xml,application/xml" hidden /></label>
+            </li>
+          </ol>
+
+          <p class="sub-h">Option B — Bookmarklet (no download)</p>
           <ol class="steps">
             <li>Drag this button to your bookmarks bar: &nbsp;
               <a id="pcBookmarklet" class="bookmarklet" href="#" draggable="true">📥 My Private Patents</a>
