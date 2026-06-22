@@ -333,7 +333,7 @@ function wireTrademarks() {
 
 async function refreshTrademarks() {
   const prevBySerial = new Map(state.marks.map((m) => [m.serialNumber, m]));
-  const { generatedAt, error, marks } = await loadTrademarkStatus();
+  const { generatedAt, info, marks } = await loadTrademarkStatus();
   // Detect changes vs what we last saw (the published JSON already reflects the
   // server-side monitor; this surfaces a desktop toast on first sight of a change).
   if (state.tmGeneratedAt && generatedAt && generatedAt !== state.tmGeneratedAt) {
@@ -350,9 +350,11 @@ async function refreshTrademarks() {
   }
   state.marks = marks;
   state.tmGeneratedAt = generatedAt;
-  $('tmGenerated').textContent = error
-    ? `⚠ ${error}`
-    : generatedAt ? `Last checked by the monitor: ${new Date(generatedAt).toLocaleString()}` : 'Not monitored yet — add serials, commit the watchlist, run the Action.';
+  const parts = [];
+  if (generatedAt) parts.push(`Last checked by the monitor: ${new Date(generatedAt).toLocaleString()}`);
+  else parts.push('Not monitored yet — add serials and commit the watchlist.');
+  if (info) parts.push(info);
+  $('tmGenerated').textContent = parts.join(' · ');
   renderTM();
   refreshDashboard();
 }

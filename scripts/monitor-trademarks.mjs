@@ -18,7 +18,22 @@ const WATCHLIST = 'data/trademark-watchlist.json';
 const OUT = 'frontend/public/trademark-status.json';
 const HISTORY = 'data/trademark-history.json';
 const CHANGES_MD = 'trademark-changes.md'; // consumed by the workflow to open an issue
-const ENDPOINT = (serial) => `https://tsdrapi.uspto.gov/ts/cd/casestatus/sn${serial}/info.json`;
+
+// USPTO moved TSDR during the June 2026 ODP migration; the exact live path has
+// shifted, so we try several known shapes and use whichever returns real JSON.
+// Order = most-likely-current first.
+const ENDPOINTS = [
+  (s) => `https://tsdrapi.uspto.gov/ts/cd/casestatus/sn${s}/info.json`,
+  (s) => `https://tsdrapi.uspto.gov/ts/cd/casestatus/sn${s}/info`,
+  (s) => `https://tsdrapi.uspto.gov/ts/cd/casestatus/${s}/info`,
+];
+
+// A "gateway stub" is the load-balancer's canned reply when the TSDR backend is
+// offline or the key isn't entitled to TSDR — not real data.
+function looksLikeGatewayStub(text) {
+  const t = (text || '').trim();
+  return !t || t.startsWith('BACKEND RESPONSE STATUS') || t.startsWith('Default fixed response') || t.startsWith('<');
+}
 
 const nowISO = new Date().toISOString();
 
@@ -91,15 +106,44 @@ function normalize(serial, j) {
   return out;
 }
 
+// Try each endpoint shape until one returns real JSON. Returns
+// { mark, unavailable } so the caller can tell "USPTO is down" apart from
+// "this serial genuinely wasn't found".
 async function fetchOne(serial) {
-  const res = await fetch(ENDPOINT(serial), {
-    headers: { 'USPTO-API-KEY': KEY, Accept: 'application/json' },
-  });
-  if (res.status === 404) return { serialNumber: serial, status: 'Not found', markText: '' };
-  if (!res.ok) return { serialNumber: serial, status: `TSDR error ${res.status}`, markText: '' };
-  const j = await res.json();
-  return normalize(serial, j);
+  let sawGatewayStub = false;
+  let lastCode = 0;
+  for (const build of ENDPOINTS) {
+    let res, body;
+    try {
+      res = await fetch(build(serial), { headers: { 'USPTO-API-KEY': KEY, Accept: 'application/json' } });
+      body = await res.text();
+    } catch {
+      continue; // network blip — try the next shape
+    }
+    lastCode = res.status;
+    const ct = res.headers.get('content-type') || '';
+    // Real JSON payload → parse it.
+    if (res.ok && ct.includes('json') && !looksLikeGatewayStub(body)) {
+      try { return { mark: normalize(serial, JSON.parse(body)) }; } catch { /* fall through */ }
+    }
+    // Gateway/backend stub (TSDR offline or key not entitled to TSDR).
+    if (looksLikeGatewayStub(body) || res.status === 403) { sawGatewayStub = true; continue; }
+    // A clean 404 that is NOT a gateway stub == this serial really isn't in TSDR.
+    if (res.status === 404) return { mark: { serialNumber: serial, status: 'Not found', markText: '' } };
+  }
+  if (sawGatewayStub) {
+    return {
+      unavailable: true,
+      mark: { serialNumber: serial, status: 'TSDR temporarily unavailable', markText: '', _note: 'USPTO TSDR API returned a gateway stub — either the API is down (June 2026 migration) or this key is not subscribed to the TSDR product at account.uspto.gov/api-manager.' },
+    };
+  }
+  return { mark: { serialNumber: serial, status: `TSDR error ${lastCode || 'unknown'}`, markText: '' } };
 }
+
+// Synthetic, non-USPTO statuses we write ourselves — never treat transitions
+// involving these as a real status change worth emailing about.
+const SYNTHETIC = /^(awaiting setup|awaiting TSDR key|TSDR temporarily unavailable|TSDR error|Not found|fetch failed)/i;
+const isReal = (s) => s && !SYNTHETIC.test(s);
 
 // Compare new marks against the previous run; return human-meaningful changes.
 function diff(prev, marks) {
@@ -107,7 +151,7 @@ function diff(prev, marks) {
   for (const m of marks) {
     const before = prev.get(String(m.serialNumber));
     if (!before) continue; // first time we see it — not a "change"
-    if (before.status && m.status && before.status !== m.status) {
+    if (isReal(before.status) && isReal(m.status) && before.status !== m.status) {
       changes.push({ serialNumber: m.serialNumber, markText: m.markText || before.markText || '', field: 'status', from: before.status, to: m.status });
     }
     if (!before.registrationNumber && m.registrationNumber) {
@@ -143,18 +187,28 @@ async function main() {
   await fs.mkdir('frontend/public', { recursive: true });
   const prev = await readPrevious();
 
+  if (!serials.length) {
+    await write({ marks: [], changes: [] });
+    await writeChangesMd([]);
+    console.log('Watchlist is empty — add serials to data/trademark-watchlist.json.');
+    return;
+  }
+
   if (!KEY) {
-    await write({ error: 'TSDR_API_KEY secret not set — add it in repo Settings → Secrets.', marks: serials.map((s) => ({ serialNumber: s, status: 'awaiting TSDR key', markText: '' })), changes: [] });
+    await write({ info: 'Trademark monitoring is configured, but no TSDR API key is available yet.', marks: serials.map((s) => ({ serialNumber: s, status: 'awaiting setup', markText: '' })), changes: [] });
     await writeChangesMd([]);
     console.log('No TSDR_API_KEY; wrote placeholder status for', serials.length, 'serial(s).');
     return;
   }
 
   const marks = [];
+  let unavailable = 0;
   for (const s of serials) {
     try {
-      marks.push(await fetchOne(s));
-      console.log('checked', s);
+      const { mark, unavailable: u } = await fetchOne(s);
+      if (u) unavailable++;
+      marks.push(mark);
+      console.log('checked', s, '→', mark.status || mark.markText || 'ok');
     } catch (e) {
       marks.push({ serialNumber: s, status: `fetch failed: ${e.message}`, markText: '' });
     }
@@ -162,10 +216,15 @@ async function main() {
     await new Promise((r) => setTimeout(r, 400));
   }
   const changes = diff(prev, marks);
-  await write({ marks, changes });
+  // Surface a single, honest banner when the whole API is unreachable, rather
+  // than silently showing every mark as broken.
+  const info = unavailable === serials.length
+    ? 'USPTO TSDR API is currently unreachable (June 2026 ODP migration), or this key is not subscribed to the TSDR product. Status will fill in automatically once it responds.'
+    : '';
+  await write({ marks, changes, ...(info ? { info } : {}) });
   await appendHistory(changes);
   await writeChangesMd(changes);
-  console.log(`Wrote ${marks.length} status record(s); ${changes.length} change(s) detected.`);
+  console.log(`Wrote ${marks.length} status record(s); ${changes.length} change(s); ${unavailable} unavailable.`);
 }
 
 async function write(payload) {

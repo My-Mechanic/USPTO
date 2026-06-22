@@ -31,7 +31,9 @@ export const tmWatch = {
   },
 };
 
-// Returns { generatedAt, error, marks: [normalized] }. Empty if not generated yet.
+// Returns { generatedAt, info, marks: [normalized] }. Empty if not generated yet.
+// `info` is a neutral status note (e.g. setup pending, USPTO API down) — not an
+// alarming "secret missing" error.
 export async function loadTrademarkStatus() {
   try {
     const res = await fetch(STATUS_URL, { cache: 'no-store' });
@@ -40,7 +42,7 @@ export async function loadTrademarkStatus() {
     const marks = (d.marks || []).map(normalizeTrademark);
     // Keep the local watchlist in sync with what's actually monitored.
     tmWatch.seed(marks.map((m) => m.serialNumber));
-    return { generatedAt: d.generatedAt || '', error: d.error || '', marks };
+    return { generatedAt: d.generatedAt || '', info: d.info || d.error || '', marks };
   } catch {
     return { marks: [] };
   }
